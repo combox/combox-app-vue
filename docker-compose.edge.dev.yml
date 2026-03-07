@@ -1,0 +1,38 @@
+services:
+  combox-app-vue:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm ci --silent && npm run dev -- --host 0.0.0.0 --port 4173"
+    environment:
+      NODE_ENV: development
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-https://api.combox.local/api/private/v1}
+      PUBLIC_WS_BASE_URL: ${PUBLIC_WS_BASE_URL:-wss://api.combox.local/api/private/v1/ws}
+      VUE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-https://api.combox.local/api/private/v1}
+      VUE_WS_BASE_URL: ${PUBLIC_WS_BASE_URL:-wss://api.combox.local/api/private/v1/ws}
+      VUE_DEV_ALLOWED_HOSTS: ${VUE_DEV_ALLOWED_HOSTS:-app.combox.local,localhost,127.0.0.1}
+      VUE_DEV_HMR_HOST: ${VUE_DEV_HMR_HOST:-app.combox.local}
+      VUE_DEV_HMR_CLIENT_PORT: ${VUE_DEV_HMR_CLIENT_PORT:-443}
+      VUE_DEV_HMR_PROTOCOL: ${VUE_DEV_HMR_PROTOCOL:-wss}
+      VITE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-https://api.combox.local/api/private/v1}
+      VITE_WS_BASE_URL: ${PUBLIC_WS_BASE_URL:-wss://api.combox.local/api/private/v1/ws}
+      VITE_DEV_ALLOWED_HOSTS: ${VUE_DEV_ALLOWED_HOSTS:-app.combox.local,localhost,127.0.0.1}
+      VITE_DEV_HMR_HOST: ${VUE_DEV_HMR_HOST:-app.combox.local}
+      VITE_DEV_HMR_CLIENT_PORT: ${VUE_DEV_HMR_CLIENT_PORT:-443}
+      VITE_DEV_HMR_PROTOCOL: ${VUE_DEV_HMR_PROTOCOL:-wss}
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./:/app
+      - ../combox-api:/combox-api
+      - combox_app_node_modules:/app/node_modules
+    restart: unless-stopped
+    networks:
+      - default
+
+volumes:
+  combox_app_node_modules:
+
+networks:
+  default:
+    external: true
+    name: combox-edge-core

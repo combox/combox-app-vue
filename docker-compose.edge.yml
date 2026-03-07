@@ -1,0 +1,40 @@
+services:
+  combox-app-vue:
+    build:
+      context: .
+      additional_contexts:
+        combox_api: ../combox-api
+      target: runtime
+    container_name: combox-app-vue
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4173
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-https://api.combox.local/api/private/v1}
+      PUBLIC_WS_BASE_URL: ${PUBLIC_WS_BASE_URL:-wss://api.combox.local/api/private/v1/ws}
+      VUE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-https://api.combox.local/api/private/v1}
+      VUE_WS_BASE_URL: ${PUBLIC_WS_BASE_URL:-wss://api.combox.local/api/private/v1/ws}
+      VITE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-https://api.combox.local/api/private/v1}
+      VITE_WS_BASE_URL: ${PUBLIC_WS_BASE_URL:-wss://api.combox.local/api/private/v1/ws}
+    networks:
+      - edge_core
+
+  combox-app-vue-mtls:
+    image: nginx:1.27-alpine
+    container_name: combox-app-vue-mtls
+    restart: unless-stopped
+    depends_on:
+      - combox-app-vue
+    volumes:
+      - ./nginx/app-mtls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../combox-edge/mtls/ca.crt:/etc/combox/mtls/ca.crt:ro
+      - ../combox-edge/mtls/servers/combox-app-vue-mtls.crt:/etc/combox/mtls/server.crt:ro
+      - ../combox-edge/mtls/servers/combox-app-vue-mtls.key:/etc/combox/mtls/server.key:ro
+    networks:
+      - edge_core
+
+networks:
+  edge_core:
+    external: true
+    name: combox-edge-core

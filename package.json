@@ -1,0 +1,46 @@
+{
+  "name": "combox-app-vue",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "webpack serve --mode development --host 0.0.0.0 --port 4173",
+    "build": "node --max-old-space-size=4096 ./node_modules/webpack/bin/webpack.js --mode production && tsc -b",
+    "check": "tsc -b",
+    "lint": "eslint .",
+    "preview": "serve -s dist -l tcp://0.0.0.0:4173",
+    "test:e2e": "echo \"E2E is not migrated yet\""
+  },
+  "dependencies": {
+    "@mdi/font": "^7.4.47",
+    "combox-api": "file:../combox-api",
+    "emojibase-data": "^17.0.0",
+    "plyr": "^3.8.4",
+    "serve": "^14.2.4",
+    "vue": "^3.5.22",
+    "vue-router": "^4.5.1",
+    "vuetify": "^4.0.0-alpha.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.1",
+    "@vue/compiler-sfc": "^3.5.22",
+    "copy-webpack-plugin": "^13.0.1",
+    "css-loader": "^7.1.2",
+    "esbuild": "^0.27.3",
+    "esbuild-loader": "^4.4.2",
+    "eslint": "^9.39.1",
+    "eslint-plugin-vue": "^10.5.1",
+    "globals": "^16.5.0",
+    "html-webpack-plugin": "^5.6.4",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.4",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.48.0",
+    "vue-eslint-parser": "^10.2.0",
+    "vue-loader": "^17.4.2",
+    "webpack": "^5.102.1",
+    "webpack-cli": "^6.0.1",
+    "webpack-dev-server": "^5.2.2"
+  }
+}

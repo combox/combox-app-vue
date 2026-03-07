@@ -1,0 +1,455 @@
+<script lang="ts">
+import {
+  changePassword,
+  confirmEmailChange,
+  forceRefreshSession,
+  getAttachment,
+  getProfile,
+  searchDirectory,
+  type AuthUser,
+  type ChatItem,
+  type SearchResults,
+  type SearchUserResult,
+  sendNewEmailCode,
+  startEmailChange,
+  updateProfile,
+  updateSessionIdleTTL,
+  verifyOldEmailCode,
+} from 'combox-api'
+import { computed, defineComponent, ref, watch, type PropType } from 'vue'
+import ChatSidebarChatsPane from './ChatSidebarChatsPane.vue'
+import ChatSidebarSettingsPane from './ChatSidebarSettingsPane.vue'
+import ChatSidebarTopicsPane from './ChatSidebarTopicsPane.vue'
+import type { AttachmentThumb, GroupChannelItem } from './chatSidebar.types'
+
+export default defineComponent({
+  name: 'ChatSidebar',
+  components: { ChatSidebarChatsPane, ChatSidebarSettingsPane, ChatSidebarTopicsPane },
+  props: {
+    chats: { type: Array as PropType<ChatItem[]>, default: () => [] },
+    selectedChatID: { type: String, required: true },
+    currentUserId: { type: String, default: '' },
+    currentUsername: { type: String, default: '' },
+    currentUserDisplayName: { type: String, default: '' },
+    currentUserAvatarSrc: { type: String, default: '' },
+    search: { type: String, required: true },
+    selectedFilterTab: { type: Number, required: true },
+    unreadAll: { type: Number, required: true },
+    unreadDirect: { type: Number, required: true },
+    unreadGroup: { type: Number, required: true },
+    unreadByChatId: { type: Object as PropType<Record<string, number>>, default: () => ({}) },
+    mutedChatIDs: { type: Object as PropType<Record<string, boolean>>, default: () => ({}) },
+    loading: { type: Boolean, required: true },
+    searchingDirectory: { type: Boolean, required: true },
+    directoryQuery: { type: String, required: true },
+    directoryResults: { type: Object as PropType<SearchResults>, required: true },
+    sidebarPanel: { type: String as PropType<'chats' | 'settings'>, required: true },
+    canCreateChannel: { type: Boolean, default: false },
+    showGroupChannelsPanel: { type: Boolean, default: false },
+    groupTitle: { type: String, default: '' },
+    groupMemberCount: { type: Number, default: 0 },
+    groupChannels: { type: Array as PropType<GroupChannelItem[]>, default: () => [] },
+    selectedGroupChannelID: { type: String, default: '' },
+    loadingGroupChannels: { type: Boolean, default: false },
+  },
+  emits: [
+    'update:search',
+    'update:selectedFilterTab',
+    'select',
+    'openSettings',
+    'closeSettings',
+    'createGroup',
+    'createChannel',
+    'closeGroupChannels',
+    'selectGroupChannel',
+    'createGroupChannel',
+  ],
+  setup(props, { emit }) {
+    const lastAttachmentPreviewById = ref<Record<string, AttachmentThumb>>({})
+    const requestedAttachmentIDs = new Set<string>()
+    const createMenuOpen = ref(false)
+    const settingsLoading = ref(false)
+    const settingsSaving = ref(false)
+    const settingsError = ref('')
+    const settingsSuccess = ref('')
+    const createDialog = ref<{ open: boolean; kind: 'group' | 'channel'; title: string; saving: boolean; error: string }>({ open: false, kind: 'group', title: '', saving: false, error: '' })
+    const createMemberQuery = ref('')
+    const createMemberResults = ref<SearchUserResult[]>([])
+    const createMemberIDs = ref<string[]>([])
+    const createMemberBusy = ref(false)
+    const profileDraft = ref({ first_name: '', last_name: '', username: '', birth_date: '' })
+    const sessionIdleDays = ref(30)
+    const passwordDraft = ref({ current: '', next: '' })
+    const passwordSaving = ref(false)
+    const emailDraft = ref({ email: '', oldCode: '', newCode: '' })
+    const emailStep = ref<'old' | 'new' | 'confirm'>('old')
+    const emailBusy = ref(false)
+    const topicCreateOpen = ref(false)
+    const topicCreateTitle = ref('')
+    const topicCreateType = ref<'text' | 'voice'>('text')
+    const topicCreateError = ref('')
+
+    const normalizedCurrentUsername = computed(() => (props.currentUsername || '').trim().toLowerCase())
+    const showDirectory = computed(() => props.search.trim().length > 0)
+    const filteredDirectoryUsers = computed(() =>
+      props.directoryResults.users.filter((user) => {
+        if (props.currentUserId && user.id === props.currentUserId) return false
+        if (!normalizedCurrentUsername.value) return Boolean(user.id)
+        return Boolean(user.id) && user.username.trim().toLowerCase() !== normalizedCurrentUsername.value
+      }),
+    )
+    const selectedCreateMembers = computed(() => createMemberIDs.value.map((id) => createMemberResults.value.find((item) => item.id === id)).filter((item): item is SearchUserResult => Boolean(item)))
+    const visibleCreateMemberResults = computed(() => createMemberResults.value.filter((user) => !createMemberIDs.value.includes(user.id) && user.id !== props.currentUserId))
+    const visibleLastAttachmentIDs = computed(() => {
+      const ids: string[] = []
+      for (const chat of props.chats) {
+        const raw = (chat.last_message_preview || '').match(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi) || []
+        ids.push(...raw)
+      }
+      return Array.from(new Set(ids))
+    })
+
+    watch(visibleLastAttachmentIDs, (ids) => {
+      for (const attachmentID of ids) {
+        if (!attachmentID || requestedAttachmentIDs.has(attachmentID) || lastAttachmentPreviewById.value[attachmentID]) continue
+        requestedAttachmentIDs.add(attachmentID)
+        void getAttachment(attachmentID).then((payload) => {
+          if (lastAttachmentPreviewById.value[attachmentID]) return
+          lastAttachmentPreviewById.value = { ...lastAttachmentPreviewById.value, [attachmentID]: { url: payload.url, preview_url: payload.preview_url } }
+        }).catch(() => {})
+      }
+    }, { immediate: true })
+
+    function onOpenSettings() { createMenuOpen.value = false; void loadSettings(); emit('openSettings') }
+    function onCloseSettings() { emit('closeSettings') }
+    function onCreateGroup() { createMenuOpen.value = false; createDialog.value = { open: true, kind: 'group', title: '', saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = [] }
+    function onCreateChannel() { createMenuOpen.value = false; if (!props.canCreateChannel) return; createDialog.value = { open: true, kind: 'channel', title: '', saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = [] }
+    function closeCreateDialog() { createDialog.value = { open: false, kind: createDialog.value.kind, title: '', saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = []; createMemberBusy.value = false }
+    function addCreateMember(user: SearchUserResult) { if (!user.id || createMemberIDs.value.includes(user.id) || user.id === props.currentUserId) return; createMemberIDs.value = [...createMemberIDs.value, user.id]; if (!createMemberResults.value.some((item) => item.id === user.id)) createMemberResults.value = [...createMemberResults.value, user]; createMemberQuery.value = '' }
+    function removeCreateMember(userID: string) { createMemberIDs.value = createMemberIDs.value.filter((id) => id !== userID) }
+    function openTopicCreate() { if (!props.canCreateChannel) return; topicCreateOpen.value = true; topicCreateTitle.value = ''; topicCreateType.value = 'text'; topicCreateError.value = '' }
+    function closeTopicCreate() { topicCreateOpen.value = false; topicCreateTitle.value = ''; topicCreateType.value = 'text'; topicCreateError.value = '' }
+    function submitTopicCreate() { const title = topicCreateTitle.value.trim(); if (!title) { topicCreateError.value = 'Topic name is required'; return } emit('createGroupChannel', { title, channel_type: topicCreateType.value }); closeTopicCreate() }
+
+    async function submitCreateDialog() {
+      const title = createDialog.value.title.trim()
+      if (!title) { createDialog.value = { ...createDialog.value, error: 'Title is required' }; return }
+      if (createDialog.value.kind === 'group' && createMemberIDs.value.length === 0) { createDialog.value = { ...createDialog.value, error: 'Add at least one participant' }; return }
+      createDialog.value = { ...createDialog.value, saving: true, error: '' }
+      const payload = { title, memberIDs: createDialog.value.kind === 'group' ? createMemberIDs.value.slice() : [], onSuccess: () => closeCreateDialog(), onError: (message: string) => { createDialog.value = { ...createDialog.value, saving: false, error: message || 'Request failed' } } }
+      if (createDialog.value.kind === 'group') emit('createGroup', payload)
+      else emit('createChannel', payload)
+    }
+
+    let createMemberTimer: number | null = null
+    watch(createMemberQuery, (query) => {
+      if (createMemberTimer) window.clearTimeout(createMemberTimer)
+      if (!createDialog.value.open || createDialog.value.kind !== 'group') { createMemberResults.value = selectedCreateMembers.value.slice(); return }
+      const clean = query.trim()
+      if (clean.length < 2) { createMemberResults.value = selectedCreateMembers.value.slice(); return }
+      createMemberTimer = window.setTimeout(async () => {
+        createMemberBusy.value = true
+        try {
+          const found = await searchDirectory({ q: clean, scope: 'users', limit: 20 })
+          const merged = [...selectedCreateMembers.value]
+          for (const user of found.users || []) if (!merged.some((item) => item.id === user.id) && user.id !== props.currentUserId) merged.push(user)
+          createMemberResults.value = merged
+        } catch {
+          createMemberResults.value = selectedCreateMembers.value.slice()
+        } finally { createMemberBusy.value = false }
+      }, 220)
+    })
+
+    async function loadSettings() {
+      settingsLoading.value = true; settingsError.value = ''; settingsSuccess.value = ''
+      try {
+        const profile = (await getProfile()) as AuthUser
+        profileDraft.value = {
+          first_name: (profile.first_name || '').trim(),
+          last_name: (profile.last_name || '').trim(),
+          username: (profile.username || '').trim(),
+          birth_date: (profile.birth_date || '').trim(),
+        }
+        const ttlSec = Number(profile.session_idle_ttl_seconds || 0)
+        if (ttlSec > 0) sessionIdleDays.value = Math.max(1, Math.round(ttlSec / 86400))
+      } catch (error) {
+        settingsError.value = error instanceof Error ? error.message : 'Failed to load settings'
+      } finally { settingsLoading.value = false }
+    }
+    async function saveProfileSettings() {
+      settingsSaving.value = true; settingsError.value = ''; settingsSuccess.value = ''
+      try {
+        await updateProfile({
+          first_name: profileDraft.value.first_name.trim(),
+          last_name: profileDraft.value.last_name.trim() || undefined,
+          username: profileDraft.value.username.trim(),
+          birth_date: profileDraft.value.birth_date.trim() || undefined,
+        })
+        await updateSessionIdleTTL(Math.max(1, Math.round(sessionIdleDays.value)) * 86400)
+        await forceRefreshSession(); await loadSettings(); settingsSuccess.value = 'Profile updated'
+      } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to save profile' } finally { settingsSaving.value = false }
+    }
+    async function savePassword() {
+      passwordSaving.value = true; settingsError.value = ''; settingsSuccess.value = ''
+      try { await changePassword(passwordDraft.value.current, passwordDraft.value.next); passwordDraft.value = { current: '', next: '' }; settingsSuccess.value = 'Password changed' }
+      catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to change password' }
+      finally { passwordSaving.value = false }
+    }
+    async function startEmailFlow() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { await startEmailChange(); emailStep.value='old'; settingsSuccess.value='Code sent to current email' } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to start email change' } finally { emailBusy.value = false } }
+    async function verifyOldCode() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { const ok = await verifyOldEmailCode(emailDraft.value.oldCode.trim()); if (!ok) throw new Error('Invalid old email code'); emailStep.value='new'; settingsSuccess.value='Old email verified' } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to verify old email code' } finally { emailBusy.value = false } }
+    async function sendNewEmailCodeStep() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { await sendNewEmailCode(emailDraft.value.email.trim()); emailStep.value='confirm'; settingsSuccess.value='Code sent to new email' } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to send code to new email' } finally { emailBusy.value = false } }
+    async function confirmNewEmailStep() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { await confirmEmailChange(emailDraft.value.newCode.trim()); emailDraft.value = { email:'', oldCode:'', newCode:'' }; emailStep.value='old'; settingsSuccess.value='Email changed' } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to confirm new email' } finally { emailBusy.value = false } }
+
+    watch(() => props.sidebarPanel, (panel) => { if (panel === 'settings') void loadSettings() }, { immediate: true })
+
+    return { emit, createMenuOpen, settingsLoading, settingsSaving, settingsError, settingsSuccess, createDialog, createMemberQuery, createMemberResults, createMemberIDs, createMemberBusy, profileDraft, sessionIdleDays, passwordDraft, passwordSaving, emailDraft, emailStep, emailBusy, topicCreateOpen, topicCreateTitle, topicCreateType, topicCreateError, showDirectory, filteredDirectoryUsers, visibleCreateMemberResults, lastAttachmentPreviewById, onOpenSettings, onCloseSettings, onCreateGroup, onCreateChannel, closeCreateDialog, submitCreateDialog, addCreateMember, removeCreateMember, saveProfileSettings, savePassword, startEmailFlow, verifyOldCode, sendNewEmailCodeStep, confirmNewEmailStep, openTopicCreate, closeTopicCreate, submitTopicCreate }
+  },
+})
+</script>
+
+<template>
+  <aside class="sbRoot">
+    <ChatSidebarSettingsPane
+      v-if="sidebarPanel === 'settings'"
+      :current-user-avatar-src="currentUserAvatarSrc"
+      :current-user-display-name="currentUserDisplayName"
+      :current-username="currentUsername"
+      :current-birth-date="profileDraft.birth_date"
+      :settings-loading="settingsLoading"
+      :settings-saving="settingsSaving"
+      :settings-error="settingsError"
+      :settings-success="settingsSuccess"
+      :profile-draft="profileDraft"
+      :session-idle-days="sessionIdleDays"
+      :password-draft="passwordDraft"
+      :password-saving="passwordSaving"
+      :email-draft="emailDraft"
+      :email-step="emailStep"
+      :email-busy="emailBusy"
+      @close="onCloseSettings"
+      @update:session-days="sessionIdleDays = $event"
+      @save-profile="saveProfileSettings"
+      @save-password="savePassword"
+      @start-email-flow="startEmailFlow"
+      @verify-old-code="verifyOldCode"
+      @send-new-email-code="sendNewEmailCodeStep"
+      @confirm-new-email="confirmNewEmailStep"
+    />
+
+    <div v-else class="sbStage" :class="{ topics: showGroupChannelsPanel }">
+
+      <!-- Shelf: always rendered, always at left edge, no animation -->
+      <div v-show="showGroupChannelsPanel" class="sbShelf">
+        <ChatSidebarChatsPane
+          :search="search"
+          :selected-filter-tab="selectedFilterTab"
+          :unread-all="unreadAll"
+          :unread-direct="unreadDirect"
+          :unread-group="unreadGroup"
+          :unread-by-chat-id="unreadByChatId"
+          :loading="loading"
+          :show-directory="false"
+          :searching-directory="false"
+          :directory-query="''"
+          :filtered-directory-users="[]"
+          :directory-results="directoryResults"
+          :chats="chats"
+          :selected-chat-i-d="selectedChatID"
+          :compact="true"
+          :create-menu-open="false"
+          :can-create-channel="canCreateChannel"
+          :last-attachment-preview-by-id="lastAttachmentPreviewById"
+          @update:search="emit('update:search', $event)"
+          @select-tab="emit('update:selectedFilterTab', $event)"
+          @toggle-create-menu="createMenuOpen = !createMenuOpen"
+          @close-create-menu="createMenuOpen = false"
+          @open-settings="onOpenSettings"
+          @create-group="onCreateGroup"
+          @create-channel="onCreateChannel"
+          @select-chat="emit('select', $event)"
+        />
+      </div>
+
+      <!-- Full chat list: slides out to the right when topics open -->
+      <div class="sbChats">
+        <ChatSidebarChatsPane
+          :search="search"
+          :selected-filter-tab="selectedFilterTab"
+          :unread-all="unreadAll"
+          :unread-direct="unreadDirect"
+          :unread-group="unreadGroup"
+          :unread-by-chat-id="unreadByChatId"
+          :loading="loading"
+          :show-directory="showDirectory"
+          :searching-directory="searchingDirectory"
+          :directory-query="directoryQuery"
+          :filtered-directory-users="filteredDirectoryUsers"
+          :directory-results="directoryResults"
+          :chats="chats"
+          :selected-chat-i-d="selectedChatID"
+          :compact="false"
+          :create-menu-open="createMenuOpen"
+          :can-create-channel="canCreateChannel"
+          :last-attachment-preview-by-id="lastAttachmentPreviewById"
+          @update:search="emit('update:search', $event)"
+          @select-tab="emit('update:selectedFilterTab', $event)"
+          @toggle-create-menu="createMenuOpen = !createMenuOpen"
+          @close-create-menu="createMenuOpen = false"
+          @open-settings="onOpenSettings"
+          @create-group="onCreateGroup"
+          @create-channel="onCreateChannel"
+          @select-chat="emit('select', $event)"
+        />
+      </div>
+
+      <!-- Topics panel: slides in from right -->
+      <div class="sbTopicsSlider">
+        <div class="sbTopicsFloating">
+          <ChatSidebarTopicsPane
+            :chats="chats"
+            :selected-chat-i-d="selectedChatID"
+            :search="search"
+            :unread-by-chat-id="unreadByChatId"
+            :group-title="groupTitle"
+            :group-member-count="groupMemberCount"
+            :group-channels="groupChannels"
+            :selected-group-channel-i-d="selectedGroupChannelID"
+            :loading-group-channels="loadingGroupChannels"
+            :can-create-channel="canCreateChannel"
+            :topic-create-open="topicCreateOpen"
+            :topic-create-title="topicCreateTitle"
+            :topic-create-type="topicCreateType"
+            :topic-create-error="topicCreateError"
+            @close="emit('closeGroupChannels')"
+            @update:search="emit('update:search', $event)"
+            @open-settings="onOpenSettings"
+            @select-chat="emit('select', $event)"
+            @select-channel="emit('selectGroupChannel', $event)"
+            @open-topic-create="openTopicCreate"
+            @close-topic-create="closeTopicCreate"
+            @submit-topic-create="submitTopicCreate"
+            @update:topic-title="topicCreateTitle = $event"
+            @update:topic-type="topicCreateType = $event"
+          />
+        </div>
+      </div>
+    </div>
+
+    <div v-if="createDialog.open" class="sbDialogOverlay" @click.self="closeCreateDialog">
+      <div class="sbDialog">
+        <div class="sbDialogTitle">{{ createDialog.kind === 'group' ? 'Create group' : 'Create channel' }}</div>
+        <div class="sbDialogText">{{ createDialog.kind === 'group' ? 'Enter the group title.' : 'Enter the channel title.' }}</div>
+        <input v-model="createDialog.title" class="sbFieldInput sbDialogInput" :placeholder="createDialog.kind === 'group' ? 'Group title' : 'Channel title'" :disabled="createDialog.saving" @keydown.enter="submitCreateDialog" />
+        <template v-if="createDialog.kind === 'group'">
+          <input v-model="createMemberQuery" class="sbFieldInput sbDialogInput" placeholder="Add participants" :disabled="createDialog.saving" />
+          <div v-if="visibleCreateMemberResults.length > 0" class="sbDialogUsers">
+            <button v-for="user in visibleCreateMemberResults" :key="user.id" type="button" class="sbDialogUser" @click="addCreateMember(user)">
+              <div class="sbDialogUserName">{{ `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.username }}</div>
+              <div class="sbDialogUserMeta">@{{ user.username }}</div>
+            </button>
+          </div>
+        </template>
+        <div v-if="createDialog.error" class="sbDialogError">{{ createDialog.error }}</div>
+        <div class="sbDialogActions">
+          <button type="button" class="sbDialogBtn muted" :disabled="createDialog.saving" @click="closeCreateDialog">Cancel</button>
+          <button type="button" class="sbDialogBtn" :disabled="createDialog.saving" @click="submitCreateDialog">{{ createDialog.saving ? 'Creating...' : 'Create' }}</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+</template>
+
+<style scoped>
+.sbRoot {
+  border-right: 1px solid rgba(0,0,0,.12);
+  overflow: hidden;
+  height: 100%;
+  min-height: 0;
+  background: #f3f3f3;
+  position: relative;
+}
+
+/* Stage */
+.sbStage {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  --shelf-w: 72px;
+  --dur: 260ms;
+  --ease: cubic-bezier(.25, .46, .45, .94);
+  background: #f4f4f4;
+}
+
+/* Shelf: always at left, always visible, no animation at all */
+.sbShelf {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: var(--shelf-w);
+  z-index: 1;
+  overflow: hidden;
+  background: #f4f4f4;
+}
+
+/* Full chat list: full size, just fades out instantly when topics open */
+.sbChats {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  background: #fff;
+}
+
+/* Hide chat list when topics open — instant, no animation */
+.sbStage.topics .sbChats {
+  display: none;
+}
+
+/* Topics panel: slides in from the right over the shelf */
+.sbTopicsSlider {
+  position: absolute;
+  top: 0; bottom: 0;
+  /* starts fully off screen to the right */
+  left: 100%;
+  right: -100%;
+  z-index: 3;
+  overflow: hidden;
+  transition: left var(--dur) var(--ease),
+              right var(--dur) var(--ease);
+  will-change: left, right;
+}
+
+.sbStage.topics .sbTopicsSlider {
+  left: var(--shelf-w);
+  right: 0;
+}
+
+/* Inner floating: fills its container */
+.sbTopicsFloating {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #f3f3f3;
+  border-left: 1px solid rgba(0,0,0,.1);
+}
+
+@media (max-width: 960px) {
+  .sbStage { --shelf-w: 64px; }
+}
+
+/* Dialogs */
+.sbDialogOverlay { position:absolute; inset:0; z-index:20; background:rgba(0,0,0,.18); display:grid; place-items:start center; padding:84px 12px 12px; }
+.sbDialog { width:min(100%,340px); background:#fff; border:1px solid rgba(0,0,0,.12); border-radius:8px; box-shadow:0 18px 48px rgba(0,0,0,.18); padding:14px; display:grid; gap:10px; }
+.sbDialogTitle { font-size:16px; font-weight:700; color:rgba(0,0,0,.88); }
+.sbDialogText { font-size:13px; color:rgba(0,0,0,.58); }
+.sbFieldInput { height:36px; border:1px solid rgba(0,0,0,.18); border-radius:6px; padding:0 10px; font-size:14px; }
+.sbDialogInput { width:100%; }
+.sbDialogUsers { max-height:180px; overflow-y:auto; display:grid; gap:6px; }
+.sbDialogUser { width:100%; padding:8px; border:1px solid rgba(0,0,0,.1); border-radius:6px; background:#fff; text-align:left; cursor:pointer; }
+.sbDialogUserName { font-size:13px; font-weight:700; color:rgba(0,0,0,.86); }
+.sbDialogUserMeta { font-size:12px; color:rgba(0,0,0,.56); }
+.sbDialogError { font-size:12px; color:#c62828; }
+.sbDialogActions { display:flex; justify-content:flex-end; gap:8px; }
+.sbDialogBtn { min-width:86px; height:34px; border:0; border-radius:6px; background:#1976d2; color:#fff; font-size:13px; font-weight:600; cursor:pointer; }
+.sbDialogBtn.muted { background:rgba(0,0,0,.08); color:rgba(0,0,0,.72); }
+</style>

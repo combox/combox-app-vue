@@ -1,0 +1,163 @@
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from '../../i18n/i18n'
+
+const props = defineProps<{
+  open: boolean
+  x: number
+  y: number
+  showDelete?: boolean
+}>()
+
+const emit = defineEmits<{
+  close: []
+  copy: []
+  react: [emoji: string]
+  reply: []
+  delete: []
+  openPicker: []
+}>()
+
+const { t } = useI18n()
+const quick = ['👍', '👎', '❤️', '🔥', '😁', '🎉', '🙏', '😡']
+const menuRef = ref<HTMLElement | null>(null)
+const resolvedX = ref(props.x)
+const resolvedY = ref(props.y)
+
+function clampMenuPosition() {
+  const menu = menuRef.value
+  if (!menu) {
+    resolvedX.value = props.x
+    resolvedY.value = props.y
+    return
+  }
+
+  const margin = 8
+  const menuRect = menu.getBoundingClientRect()
+  const maxX = Math.max(margin, window.innerWidth - menuRect.width - margin)
+  const maxY = Math.max(margin, window.innerHeight - menuRect.height - margin)
+
+  resolvedX.value = Math.min(Math.max(props.x, margin), maxX)
+  resolvedY.value = Math.min(Math.max(props.y, margin), maxY)
+}
+
+async function syncMenuPosition() {
+  if (!props.open) return
+  await nextTick()
+  clampMenuPosition()
+}
+
+watch(() => [props.open, props.x, props.y], () => {
+  void syncMenuPosition()
+}, { immediate: true })
+
+const menuStyle = computed(() => ({ left: `${resolvedX.value}px`, top: `${resolvedY.value}px` }))
+
+function handleViewportChange() {
+  void syncMenuPosition()
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', handleViewportChange)
+  window.addEventListener('scroll', handleViewportChange, true)
+}
+
+onBeforeUnmount(() => {
+  if (typeof window === 'undefined') return
+  window.removeEventListener('resize', handleViewportChange)
+  window.removeEventListener('scroll', handleViewportChange, true)
+})
+</script>
+
+<template>
+  <Teleport to="body">
+    <div v-if="open" class="cmOverlay" @click="emit('close')">
+      <div ref="menuRef" class="cmMenu" :style="menuStyle" @click.stop>
+        <div class="cmQuickWrap">
+          <button v-for="emoji in quick" :key="emoji" type="button" class="cmQuick" @click="emit('react', emoji)">
+            <span class="cmEmoji">{{ emoji }}</span>
+          </button>
+          <button type="button" class="cmQuick cmMore" :title="t('chat.add_reaction', undefined, 'Add reaction')" @click="emit('openPicker')">▾</button>
+        </div>
+
+        <div class="cmDivider" />
+
+        <button type="button" class="cmItem" @click="emit('reply')">{{ t('chat.reply', undefined, 'Reply') }}</button>
+        <button type="button" class="cmItem" @click="emit('copy')">{{ t('chat.copy', undefined, 'Copy') }}</button>
+        <button v-if="showDelete" type="button" class="cmItem danger" @click="emit('delete')">{{ t('chat.delete', undefined, 'Delete') }}</button>
+      </div>
+    </div>
+  </Teleport>
+</template>
+
+<style scoped>
+.cmOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+
+.cmMenu {
+  position: fixed;
+  min-width: 240px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+}
+
+.cmQuickWrap {
+  padding: 8px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.cmQuick {
+  width: 34px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 0;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cmQuick:hover,
+.cmItem:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.cmEmoji {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.cmMore {
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.6);
+}
+
+.cmDivider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.cmItem {
+  width: 100%;
+  min-height: 40px;
+  border: 0;
+  background: #fff;
+  text-align: left;
+  padding: 8px 14px;
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.88);
+  cursor: pointer;
+}
+
+.cmItem.danger {
+  color: #d32f2f;
+}
+</style>
