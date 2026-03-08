@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { parseMessageContent, type ChatItem, type SearchResults, type SearchUserResult } from 'combox-api'
-import { normalizeAvatarSrc } from './chatUtils'
+import type { ChatItem, SearchResults, SearchUserResult } from 'combox-api'
+import { firstPreviewAttachmentId, normalizeAvatarSrc, summarizeMessagePreview } from './chatUtils'
 import type { AttachmentThumb } from './chatSidebar.types'
 import { useI18n } from '../../i18n/i18n'
 
@@ -34,26 +34,27 @@ const emit = defineEmits<{
   (e: 'create-group'): void
   (e: 'create-channel'): void
   (e: 'select-chat', chatID: string): void
+  (e: 'select-directory-chat', chat: SearchResults['chats'][number]): void
+  (e: 'select-directory-user', user: SearchUserResult): void
 }>()
 
 const { t } = useI18n()
 
 function chatPreview(chat: ChatItem): string {
-  const parsed = parseMessageContent(chat.last_message_preview || '')
-  const text = (parsed.text || '').trim()
-  if (text) return text
-  const kind = (parsed.attachments[0]?.kind || '').trim().toLowerCase()
-  if (kind === 'video') return t('chat.video')
-  if (kind === 'image') return t('chat.photo')
-  if (kind === 'audio') return t('chat.audio')
-  if (kind) return t('chat.file')
-  return t('chat.standard')
+  return summarizeMessagePreview(chat.last_message_preview || '', {
+    gif: t('chat.gif'),
+    video: t('chat.video'),
+    photo: t('chat.photo'),
+    audio: t('chat.audio'),
+    file: t('chat.file'),
+    empty: t('chat.standard'),
+  })
 }
 
 function firstAttachmentThumb(chat: ChatItem): string {
-  const attachment = parseMessageContent(chat.last_message_preview || '').attachments[0]
-  if (!attachment) return ''
-  return props.lastAttachmentPreviewById[attachment.id]?.preview_url || props.lastAttachmentPreviewById[attachment.id]?.url || ''
+  const attachmentID = firstPreviewAttachmentId(chat.last_message_preview || '')
+  if (!attachmentID) return ''
+  return props.lastAttachmentPreviewById[attachmentID]?.preview_url || props.lastAttachmentPreviewById[attachmentID]?.url || ''
 }
 
 function formatDate(value: string): string {
@@ -83,7 +84,7 @@ function formatDate(value: string): string {
   <div class="cpRoot" :class="{ compact }">
     <template v-if="compact">
       <div class="cpShelfHeader">
-        <button type="button" class="cpIconBtn" aria-label="Menu" @click="emit('open-settings')">
+        <button type="button" class="cpIconBtn" :aria-label="t('chat.menu')" @click="emit('open-settings')">
           <v-icon icon="mdi-menu" size="18" />
         </button>
       </div>
@@ -114,11 +115,14 @@ function formatDate(value: string): string {
     <template v-else>
       <div class="cpHeader can-have-forum">
         <div class="cpTitleRow row-row">
-          <button type="button" class="cpIconBtn" aria-label="Menu" @click="emit('open-settings')">
+          <button type="button" class="cpIconBtn" :aria-label="t('chat.menu')" @click="emit('open-settings')">
             <v-icon icon="mdi-menu" size="18" />
           </button>
           <div class="cpTitle sidebar-header__title">{{ t('chat.title') }}</div>
         </div>
+        <button type="button" class="cpIconBtn" :aria-label="t('chat.create', undefined, 'Create')" @click="emit('toggle-create-menu')">
+          <v-icon icon="mdi-plus" size="20" />
+        </button>
       </div>
 
       <div class="cpSearchWrap can-have-forum">
@@ -132,7 +136,7 @@ function formatDate(value: string): string {
       <div v-if="createMenuOpen" class="cpCreateOverlay" @click="emit('close-create-menu')" />
       <div v-if="createMenuOpen" class="cpCreateMenu">
         <button type="button" class="cpCreateItem" @click="emit('create-group')">{{ t('chat.create_group') }}</button>
-        <button type="button" class="cpCreateItem" :disabled="!canCreateChannel" :class="{ disabled: !canCreateChannel }" @click="emit('create-channel')">{{ t('chat.create_channel') }}</button>
+        <button type="button" class="cpCreateItem" @click="emit('create-channel')">{{ t('chat.create_channel') }}</button>
       </div>
 
       <div class="cpTabs folders-tabs-scrollable">
@@ -149,7 +153,7 @@ function formatDate(value: string): string {
           <div v-else-if="searchingDirectory" class="cpEmpty">{{ t('chat.loading_short') }}</div>
 
           <div v-if="filteredDirectoryUsers.length > 0" class="cpSubheader">{{ t('chat.people') }}</div>
-          <button v-for="user in filteredDirectoryUsers" :key="`u:${user.id}`" type="button" class="cpItem">
+          <button v-for="user in filteredDirectoryUsers" :key="`u:${user.id}`" type="button" class="cpItem" @click="emit('select-directory-user', user)">
             <img v-if="normalizeAvatarSrc(user.avatar_data_url || '')" class="cpAvatarImg" :src="normalizeAvatarSrc(user.avatar_data_url || '')" :alt="user.username" />
             <div v-else class="cpAvatar">{{ (user.first_name || user.username || '?').slice(0, 1).toUpperCase() }}</div>
             <div class="cpMain">
@@ -159,7 +163,7 @@ function formatDate(value: string): string {
           </button>
 
           <div v-if="directoryResults.chats.length > 0" class="cpSubheader">{{ t('chat.public_chats') }}</div>
-          <button v-for="chat in directoryResults.chats" :key="`c:${chat.id}`" type="button" class="cpItem" @click="emit('select-chat', chat.id)">
+          <button v-for="chat in directoryResults.chats" :key="`c:${chat.id}`" type="button" class="cpItem" @click="emit('select-directory-chat', chat)">
             <img v-if="normalizeAvatarSrc((chat as any).avatar_data_url || '')" class="cpAvatarImg" :src="normalizeAvatarSrc((chat as any).avatar_data_url || '')" :alt="chat.title" />
             <div v-else class="cpAvatar">{{ chat.title.slice(0, 1).toUpperCase() }}</div>
             <div class="cpMain">
@@ -248,15 +252,16 @@ function formatDate(value: string): string {
 .cpCreateOverlay { position: absolute; inset: 0; z-index: 5; background: transparent; }
 .cpCreateMenu {
   position: absolute; top: 54px; right: 12px; z-index: 6;
-  min-width: 176px; background: var(--surface-strong); border: 1px solid var(--border);
-  border-radius: 18px;
+  min-width: 156px; max-width: 190px;
+  background: var(--surface-strong); border: 1px solid var(--border);
+  border-radius: 14px;
   box-shadow: var(--shadow-soft);
-  padding: 6px 0;
+  padding: 4px 0;
 }
 .cpCreateItem {
-  width: 100%; min-height: 38px; padding: 0 16px;
+  width: 100%; min-height: 34px; padding: 0 12px;
   border: 0; background: transparent; text-align: left;
-  cursor: pointer; font-size: 14px; color: var(--text);
+  cursor: pointer; font-size: 13px; color: var(--text);
   transition: background 100ms;
 }
 .cpCreateItem:hover { background: var(--surface-soft); }

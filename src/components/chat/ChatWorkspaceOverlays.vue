@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ChatItem } from 'combox-api'
 import { computed } from 'vue'
+import { useI18n } from '../../i18n/i18n'
 import PhotoViewer from './PhotoViewer.vue'
 import VideoViewer from './VideoViewer.vue'
 
@@ -23,6 +24,8 @@ const emit = defineEmits<{
   openImage: [src: string]
   openVideo: [payload: { attachmentID: string; src: string; poster?: string; filename?: string }]
 }>()
+
+const { t } = useI18n()
 
 function openInfo() {
   emit('closeChatMenu')
@@ -75,16 +78,16 @@ const chatMenuStyle = computed(() => {
       </transition>
       <transition name="cmPop">
         <div v-if="props.chatMenuAnchor" class="chatMenu" :style="chatMenuStyle" @click.stop>
-          <button type="button" class="chatMenuItem" @click="openInfo">Chat info</button>
-          <button type="button" class="chatMenuItem" @click="openMessageSearch">Search</button>
-          <button type="button" class="chatMenuItem" @click="toggleMute">{{ props.isSelectedChatMuted ? 'Unmute chat' : 'Mute chat' }}</button>
+          <button type="button" class="chatMenuItem" @click="openInfo">{{ t('chat.chat_info') }}</button>
+          <button type="button" class="chatMenuItem" @click="openMessageSearch">{{ t('chat.search') }}</button>
+          <button type="button" class="chatMenuItem" @click="toggleMute">{{ props.isSelectedChatMuted ? t('chat.unmute') : t('chat.mute') }}</button>
           <button
             v-if="props.selectedChat && !props.selectedChat.is_direct"
             type="button"
             class="chatMenuItem chatMenuItemDanger"
             @click="leaveGroup"
           >
-            Leave group
+            {{ t('chat.leave_chat') }}
           </button>
         </div>
       </transition>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from '../../i18n/i18n'
 import ChatComposer from './ChatComposer.vue'
 import ChatConversationHeader from './ChatConversationHeader.vue'
 import ChatInfoPanel from './ChatInfoPanel.vue'
@@ -8,6 +9,8 @@ import ChatSidebar from './ChatSidebar.vue'
 import ChatWorkspaceOverlays from './ChatWorkspaceOverlays.vue'
 import { normalizeAvatarSrc } from './chatUtils'
 import { useChatWorkspace } from './useChatWorkspace.runtime'
+
+const { t } = useI18n()
 
 const {
   currentUser,
@@ -31,6 +34,7 @@ const {
   contextMenu,
   contextReactionAnchor,
   replyToMessage,
+  editingMessage,
   pendingFiles,
   directoryQuery,
   directoryResults,
@@ -47,6 +51,8 @@ const {
   peerProfile,
   focusedInfoUserProfile,
   chatMembers,
+  removedChatMembers,
+  selectedChatInviteLinks,
   directPeerId,
   infoSubtitle,
   chatSubtitle,
@@ -56,6 +62,9 @@ const {
   loadingGroupChannels,
   setChatFilter,
   selectChat,
+  selectDirectoryChat,
+  openDirectChatByUsername,
+  openDirectChatWithUser,
   selectGroupChannel,
   setPendingFiles,
   removePendingFile,
@@ -68,8 +77,10 @@ const {
   selectReactionFromPicker,
   copyContextMessage,
   replyFromContextMenu,
+  beginReplyToMessage,
   clearReplyToMessage,
   deleteContextMessage,
+  editFromContextMenu,
   openPhotoViewer,
   closePhotoViewer,
   openVideoViewer,
@@ -86,6 +97,8 @@ const {
   closeGroupChannelsPanel,
   createGroupChat,
   createChannelForSelectedGroup,
+  createPublicChannelChat,
+  createSelectedChatInviteLink,
   updateSelectedGroupProfile,
   leaveSelectedChat,
   canCreateChannel,
@@ -93,10 +106,23 @@ const {
   updateSelectedGroupMemberRole,
   removeSelectedGroupMember,
   toggleMuteSelectedChat,
+  subscribeSelectedPublicChannel,
+  unsubscribeSelectedPublicChannel,
   sendDraft,
 } = useChatWorkspace()
 
 const isMediaOverlayOpen = computed(() => Boolean(photoViewerSrc.value) || Boolean(videoViewer.value))
+const discussionRootMessage = ref<(typeof messages.value)[number] | null>(null)
+const inDiscussionMode = computed(() => Boolean(discussionRootMessage.value && selectedChat.value?.kind === 'public_channel'))
+const composerReplyTarget = computed(() => (inDiscussionMode.value ? discussionRootMessage.value : replyToMessage.value))
+const renderedMessages = computed(() => {
+  if (!inDiscussionMode.value || !discussionRootMessage.value) return filteredMessages.value
+  const root = discussionRootMessage.value
+  const rootID = (root.raw.id || '').trim()
+  if (!rootID) return filteredMessages.value
+  const comments = messages.value.filter((message) => (message.raw.reply_to_message_id || '').trim() === rootID)
+  return [root, ...comments]
+})
 const currentUserAvatarSrc = computed(() => normalizeAvatarSrc(currentUser?.avatar_data_url || localProfile?.avatarDataUrl || ''))
 const currentUserDisplayName = computed(
   () => `${(currentUser?.first_name || localProfile?.firstName || '').trim()} ${(currentUser?.last_name || localProfile?.lastName || '').trim()}`.trim() || currentUser?.username || '',
@@ -151,6 +177,7 @@ const channelPanelTitle = computed(() => {
 })
 
 const conversationTitle = computed(() => {
+  if (inDiscussionMode.value) return 'Discussion'
   const active = selectedChat.value
   if (!active) return 'Chat'
   const kind = (active.kind || '').trim()
@@ -159,12 +186,69 @@ const conversationTitle = computed(() => {
   return active.title || 'Chat'
 })
 
+const conversationSubtitle = computed(() => {
+  if (!inDiscussionMode.value || !discussionRootMessage.value) return chatSubtitle.value
+  const count = Math.max(0, renderedMessages.value.length - 1)
+  return `${count} ${count === 1 ? 'comments' : 'comments'}`
+})
+
+watch(selectedChatID, () => {
+  discussionRootMessage.value = null
+})
+
+function openDiscussion(message: (typeof messages.value)[number]) {
+  discussionRootMessage.value = message
+  beginReplyToMessage(message)
+}
+
+function closeDiscussion() {
+  discussionRootMessage.value = null
+  clearReplyToMessage()
+}
+
+const canModerateSelectedPublicChannel = computed(() => {
+  const active = selectedChat.value
+  if (!active || (active.kind || '').trim() !== 'public_channel') return false
+  const role = (active.viewer_role || '').trim().toLowerCase()
+  return role === 'owner' || role === 'admin'
+})
+
+const canSendInSelectedChat = computed(() => {
+  const active = selectedChat.value
+  if (!active) return false
+  if ((active.kind || '').trim() !== 'public_channel') return true
+  return canModerateSelectedPublicChannel.value
+})
+
+const canReactInSelectedChat = computed(() => {
+  const active = selectedChat.value
+  if (!active) return false
+  if ((active.kind || '').trim() !== 'public_channel') return true
+  const role = (active.viewer_role || '').trim().toLowerCase()
+  return role === 'owner' || role === 'admin' || role === 'subscriber'
+})
+
+const showPublicChannelViewerBar = computed(() => {
+  const active = selectedChat.value
+  if (!active || !hasActiveChat.value || inDiscussionMode.value) return false
+  return (active.kind || '').trim() === 'public_channel' && !canSendInSelectedChat.value
+})
+
+const canEditContextMessage = computed(() => {
+  const target = contextMenu.value?.message
+  if (!target) return false
+  if ((target.raw.user_id || '').trim() === (currentUser?.id || '').trim()) return true
+  return canModerateSelectedPublicChannel.value
+})
+
+const canDeleteContextMessage = computed(() => canEditContextMessage.value)
+
 async function handleCreateGroup(input: { title: string; memberIDs: string[]; onSuccess: () => void; onError: (message: string) => void }) {
   try {
     await createGroupChat(input.title, input.memberIDs)
     input.onSuccess()
   } catch (error) {
-    input.onError(error instanceof Error ? error.message : 'Unable to create group')
+    input.onError(error instanceof Error ? error.message : errorText.value || 'Unable to create group')
   }
 }
 
@@ -172,14 +256,24 @@ async function handleCreateChannel(input: {
   title: string
   channel_type?: 'text' | 'voice'
   memberIDs?: string[]
+  publicSlug?: string
+  isPublic?: boolean
+  avatarDataUrl?: string | null
   onSuccess: () => void
   onError: (message: string) => void
 }) {
   try {
-    await createChannelForSelectedGroup(input.title, input.channel_type)
+    if (typeof input.isPublic === 'boolean') {
+      await createPublicChannelChat(input.title, input.publicSlug || '', input.isPublic)
+      if (input.avatarDataUrl) {
+        await updateSelectedGroupProfile({ title: input.title, avatarDataUrl: input.avatarDataUrl })
+      }
+    } else {
+      await createChannelForSelectedGroup(input.title, input.channel_type)
+    }
     input.onSuccess()
   } catch (error) {
-    input.onError(error instanceof Error ? error.message : 'Unable to create channel')
+    input.onError(error instanceof Error ? error.message : errorText.value || 'Unable to create channel')
   }
 }
 
@@ -191,12 +285,26 @@ async function handleAddMembers(memberIDs: string[]) {
   }
 }
 
-async function handleSaveGroupProfile(input: { title: string; avatarDataUrl?: string | null; onSuccess: () => void; onError: (message: string) => void }) {
+async function handleSaveGroupProfile(input: {
+  title: string
+  avatarDataUrl?: string | null
+  commentsEnabled?: boolean
+  isPublic?: boolean
+  publicSlug?: string | null
+  onSuccess: () => void
+  onError: (message: string) => void
+}) {
   try {
-    await updateSelectedGroupProfile({ title: input.title, avatarDataUrl: input.avatarDataUrl })
+    await updateSelectedGroupProfile({
+      title: input.title,
+      avatarDataUrl: input.avatarDataUrl,
+      commentsEnabled: input.commentsEnabled,
+      isPublic: input.isPublic,
+      publicSlug: input.publicSlug,
+    })
     input.onSuccess()
   } catch (error) {
-    input.onError(error instanceof Error ? error.message : 'Unable to save group')
+    input.onError(error instanceof Error ? error.message : errorText.value || 'Unable to save group')
   }
 }
 
@@ -205,11 +313,11 @@ async function handleLeaveChat(input: { onSuccess: () => void; onError: (message
     await leaveSelectedChat()
     input.onSuccess()
   } catch (error) {
-    input.onError(error instanceof Error ? error.message : 'Unable to leave chat')
+    input.onError(error instanceof Error ? error.message : errorText.value || 'Unable to leave chat')
   }
 }
 
-async function handleUpdateMemberRole(input: { userID: string; role: 'member' | 'moderator' | 'admin' }) {
+async function handleUpdateMemberRole(input: { userID: string; role: 'member' | 'moderator' | 'admin' | 'subscriber' | 'banned' }) {
   try {
     await updateSelectedGroupMemberRole(input.userID, input.role)
   } catch {
@@ -304,6 +412,8 @@ onBeforeUnmount(() => {
         }
       "
       @select="selectChat"
+      @select-directory-chat="selectDirectoryChat"
+      @select-directory-user="(user) => openDirectChatWithUser(user.id)"
       @open-settings="openSidebarSettings"
       @close-settings="closeSidebarSettings"
       @create-group="handleCreateGroup"
@@ -320,24 +430,29 @@ onBeforeUnmount(() => {
       <ChatConversationHeader
         v-if="hasActiveChat"
         :title="conversationTitle"
-        :subtitle="chatSubtitle"
+        :subtitle="conversationSubtitle"
         :avatar-text="(selectedChat?.title || 'C').slice(0, 1).toUpperCase()"
         :avatar-src="normalizeAvatarSrc(peerProfile?.avatar_data_url || selectedChat?.avatar_data_url || '')"
         :search-open="messageSearchOpen"
         :search-value="messageSearch"
+        :show-back="inDiscussionMode"
         @open-info="openInfo"
         @open-search="openMessageSearch"
         @close-search="closeMessageSearch"
         @update-search="messageSearch = $event"
         @open-menu="openChatMenu"
+        @back="closeDiscussion"
       />
 
-      <transition name="convFade" mode="out-in">
+      <transition name="convFade">
         <div :key="selectedChatID" class="convBody">
           <ChatMessageList
             :loading="loadingMessages"
-            :messages="filteredMessages"
+            :messages="renderedMessages"
             :selected-chat-i-d="selectedChatID"
+            :discussion-mode="inDiscussionMode"
+            :is-public-channel="Boolean(selectedChat && selectedChat.kind === 'public_channel' && !inDiscussionMode)"
+            :comments-enabled="Boolean(selectedChat?.comments_enabled ?? true)"
             :message-search="messageSearch"
             :error-text="errorText"
             :current-user-id="currentUser?.id || ''"
@@ -350,9 +465,16 @@ onBeforeUnmount(() => {
             :sender-name-by-user-id="senderNameByUserId"
             :sender-role-by-user-id="senderRoleByUserId"
             :show-sender-meta="Boolean(selectedChat && !selectedChat.is_direct)"
+            :can-edit-context-message="canEditContextMessage"
+            :can-delete-context-message="canDeleteContextMessage"
+            :can-comment="canSendInSelectedChat"
+            :can-react="canReactInSelectedChat"
             @open-image="openPhotoViewer"
             @open-video="openVideoViewer"
             @open-user-info="openInfoForUser"
+            @open-username="openDirectChatByUsername"
+            @reply-to-message="beginReplyToMessage"
+            @open-discussion="openDiscussion"
             @react="({ messageID, emoji }) => reactToMessage(messageID, emoji)"
             @mark-read="({ chatID, messageIDs }) => markMessagesRead(chatID, messageIDs)"
             @open-context-menu="openContextMenu"
@@ -362,24 +484,48 @@ onBeforeUnmount(() => {
             @select-reaction-from-picker="selectReactionFromPicker"
             @copy-context-message="copyContextMessage"
             @reply-context-message="replyFromContextMenu"
+            @edit-context-message="editFromContextMenu"
             @delete-context-message="deleteContextMessage"
             @near-bottom="isNearBottom = $event"
           />
         </div>
       </transition>
 
-      <div v-if="hasActiveChat" class="composerInline">
+      <div v-if="hasActiveChat && !showPublicChannelViewerBar" class="composerInline">
         <ChatComposer
           :chat-key="selectedChatID"
           :sending="sending"
-          :disabled="!selectedChatID"
+          :disabled="!selectedChatID || !canSendInSelectedChat"
           :pending-files="pendingFiles"
-          :reply-to-message="replyToMessage"
+          :reply-to-message="composerReplyTarget"
+          :editing-message="editingMessage"
+          :suppress-reply-preview="inDiscussionMode"
           @pick-files="setPendingFiles"
           @remove-pending-file="removePendingFile"
           @send="sendDraft"
           @clear-reply="clearReplyToMessage"
+          @clear-edit="editFromContextMenu(null)"
         />
+      </div>
+
+      <div v-else-if="showPublicChannelViewerBar" class="viewerActionBar">
+        <button type="button" class="viewerIconBtn" :aria-label="t(Boolean(selectedChatID && mutedChatIDs[selectedChatID]) ? 'chat.unmute' : 'chat.mute')" @click="toggleMuteSelectedChat">
+          <v-icon :icon="Boolean(selectedChatID && mutedChatIDs[selectedChatID]) ? 'mdi-bell-ring-outline' : 'mdi-bell-off-outline'" size="20" />
+        </button>
+        <button
+          type="button"
+          class="viewerPrimaryBtn"
+          @click="((selectedChat?.viewer_role || '').trim().toLowerCase() === 'subscriber' ? unsubscribeSelectedPublicChannel() : subscribeSelectedPublicChannel())"
+        >
+          {{
+            (selectedChat?.viewer_role || '').trim().toLowerCase() === 'subscriber'
+              ? t('chat.unsubscribe', undefined, 'Unsubscribe')
+              : t('chat.subscribe', undefined, 'Subscribe')
+          }}
+        </button>
+        <button type="button" class="viewerIconBtn" :aria-label="t('chat.open_info', undefined, 'Open info')" @click="openInfo">
+          <v-icon icon="mdi-information-outline" size="20" />
+        </button>
       </div>
 
       <ChatWorkspaceOverlays
@@ -410,14 +556,22 @@ onBeforeUnmount(() => {
         :peer-profile="peerProfile"
         :focused-user-profile="focusedInfoUserProfile"
         :chat-members="chatMembers"
+        :removed-chat-members="removedChatMembers"
+        :selected-chat-invite-links="selectedChatInviteLinks"
         :messages="messages"
         :direct-peer-id="directPeerId"
+        :muted-chat-i-ds="mutedChatIDs"
         @close="closeInfo"
         @save-group-profile="handleSaveGroupProfile"
         @leave-chat="handleLeaveChat"
         @add-members="handleAddMembers"
         @update-member-role="handleUpdateMemberRole"
         @remove-member="handleRemoveMember"
+        @subscribe-public-channel="subscribeSelectedPublicChannel"
+        @unsubscribe-public-channel="unsubscribeSelectedPublicChannel"
+        @create-invite-link="createSelectedChatInviteLink"
+        @open-direct-chat="openDirectChatWithUser"
+        @toggle-mute-chat="toggleMuteSelectedChat"
         @open-image="openPhotoViewer"
         @open-video="openVideoViewer"
       />
@@ -478,6 +632,51 @@ onBeforeUnmount(() => {
 
 .composerInline > * {
   pointer-events: auto;
+}
+
+.viewerActionBar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  padding: 0 16px 12px;
+}
+
+.viewerPrimaryBtn {
+  min-width: min(560px, calc(100vw - 180px));
+  height: 52px;
+  padding: 0 24px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow-soft);
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.viewerIconBtn {
+  width: 52px;
+  height: 52px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow-soft);
+  color: var(--text-soft);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.viewerPrimaryBtn:hover,
+.viewerIconBtn:hover {
+  background: var(--surface);
 }
 
 .infoDock {

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 type Reaction = {
   emoji: string
+  count?: number
   user_ids: string[]
 }
 
@@ -11,6 +12,7 @@ const props = defineProps<{
   currentUserId: string
   currentUserAvatarSrc?: string
   avatarByUserId?: Record<string, string>
+  canReact?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,9 +29,9 @@ const normalized = computed(() => {
           .map((id) => (typeof id === 'string' ? id.trim() : ''))
           .filter(Boolean)
       : []
-    const count = userIds.length
+    const count = typeof item.count === 'number' && item.count > 0 ? item.count : userIds.length
     const mine = Boolean(me && userIds.includes(me))
-    const showAvatars = count > 0 && count <= 2
+    const showAvatars = userIds.length > 0 && count > 0 && count <= 2
     const avatarItems = showAvatars
       ? userIds.slice(0, 2).map((id) => ({
           id,
@@ -50,7 +52,8 @@ const normalized = computed(() => {
       type="button"
       class="rbBtn"
       :class="{ mine: item.mine }"
-      @click="emit('react', item.emoji)"
+      :disabled="canReact === false"
+      @click="canReact !== false && emit('react', item.emoji)"
     >
       <template v-if="item.showAvatars">
         <v-avatar
@@ -65,13 +68,10 @@ const normalized = computed(() => {
           <span v-else>{{ (avatar.id || '?').slice(0, 1).toUpperCase() }}</span>
         </v-avatar>
       </template>
-      <span>{{ item.emoji }}</span>
+      <span class="emoji rbEmoji">{{ item.emoji }}</span>
       <span v-if="item.count > 1" class="rbCount">{{ item.count }}</span>
     </button>
 
-    <button type="button" class="rbAdd" @click="emit('react', '❤️')">
-      <v-icon icon="mdi-emoticon-happy-outline" size="16" />
-    </button>
   </div>
 </template>
 
@@ -97,6 +97,11 @@ const normalized = computed(() => {
   font-size: 13px;
 }
 
+.rbBtn:disabled {
+  opacity: 0.72;
+  cursor: default;
+}
+
 .rbAvatar {
   margin-left: -4px;
   border: 1px solid rgba(0, 0, 0, 0.1);
@@ -118,15 +123,12 @@ const normalized = computed(() => {
   background: rgba(30, 136, 229, 0.08);
 }
 
-.rbAdd {
-  width: 28px;
-  padding: 0;
-  justify-content: center;
-  opacity: 0.72;
-}
-
 .rbCount {
   font-size: 12px;
   color: rgba(0, 0, 0, 0.6);
+}
+
+.rbEmoji {
+  line-height: 1;
 }
 </style>

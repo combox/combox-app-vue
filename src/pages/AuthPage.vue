@@ -7,14 +7,14 @@ const { locale, setLocale, t } = useI18n()
 const langOpen = ref(false)
 
 const LANG_ROWS = [
-  { id: 'en', title: 'English', subtitle: 'English', enabled: true },
-  { id: 'ru', title: 'Русский', subtitle: 'Russian', enabled: true },
-  { id: 'de', title: 'Deutsch', subtitle: 'German', enabled: false },
-  { id: 'fr', title: 'Français', subtitle: 'French', enabled: false },
-  { id: 'it', title: 'Italiano', subtitle: 'Italian', enabled: false },
-  { id: 'nl', title: 'Nederlands', subtitle: 'Dutch', enabled: false },
-  { id: 'pl', title: 'Polski', subtitle: 'Polish', enabled: false },
-  { id: 'uk', title: 'Українська', subtitle: 'Ukrainian', enabled: false },
+  { id: 'en', title: t('common.lang_native_en'), subtitle: t('common.lang_name_en'), enabled: true },
+  { id: 'ru', title: t('common.lang_native_ru'), subtitle: t('common.lang_name_ru'), enabled: true },
+  { id: 'de', title: t('common.lang_native_de'), subtitle: t('common.lang_name_de'), enabled: false },
+  { id: 'fr', title: t('common.lang_native_fr'), subtitle: t('common.lang_name_fr'), enabled: false },
+  { id: 'it', title: t('common.lang_native_it'), subtitle: t('common.lang_name_it'), enabled: false },
+  { id: 'nl', title: t('common.lang_native_nl'), subtitle: t('common.lang_name_nl'), enabled: false },
+  { id: 'pl', title: t('common.lang_native_pl'), subtitle: t('common.lang_name_pl'), enabled: false },
+  { id: 'uk', title: t('common.lang_native_uk'), subtitle: t('common.lang_name_uk'), enabled: false },
 ] as const
 
 function selectLocale(id: string, enabled: boolean) {

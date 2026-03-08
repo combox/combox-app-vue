@@ -58,6 +58,39 @@ export function normalizeAvatarSrc(src: string): string {
   return ''
 }
 
+function detectAttachmentPreviewKind(token: { kind?: string; filename?: string; mimeType?: string }): 'gif' | 'video' | 'image' | 'audio' | 'file' {
+  const kind = (token.kind || '').trim().toLowerCase()
+  const filename = (token.filename || '').trim().toLowerCase()
+  const mimeType = (token.mimeType || '').trim().toLowerCase()
+  if (kind === 'gif' || mimeType === 'image/gif' || filename.endsWith('.gif')) return 'gif'
+  if (kind === 'video') return 'video'
+  if (kind === 'image') return 'image'
+  if (kind === 'audio' || mimeType.startsWith('audio/')) return 'audio'
+  return 'file'
+}
+
+export function summarizeMessagePreview(
+  raw: string,
+  labels: { gif: string; video: string; photo: string; audio: string; file: string; empty: string },
+): string {
+  const parsed = getParsedContent(raw || '')
+  const text = (parsed.text || '').trim()
+  if (text) return text
+  const first = parsed.attachments[0]
+  if (!first) return labels.empty
+  const previewKind = detectAttachmentPreviewKind(first)
+  if (previewKind === 'gif') return labels.gif
+  if (previewKind === 'video') return labels.video
+  if (previewKind === 'image') return labels.photo
+  if (previewKind === 'audio') return labels.audio
+  return labels.file
+}
+
+export function firstPreviewAttachmentId(raw: string): string {
+  const parsed = getParsedContent(raw || '')
+  return (parsed.attachments[0]?.id || '').trim()
+}
+
 export function isComboxHost(hostnameRaw: string): boolean {
   const hostname = (hostnameRaw || '').trim().toLowerCase()
   return hostname === 'combox.local' || hostname.endsWith('.combox.local')
@@ -91,7 +124,27 @@ export function openComboxAwareUrl(urlRaw: string): void {
   const raw = (urlRaw || '').trim()
   if (!raw) return
   if (isComboxUrl(raw)) {
-    window.location.assign(toCurrentOriginComboxUrl(raw))
+    try {
+      const parsed = new URL(raw)
+      const nextHash = (parsed.hash || '').trim()
+      if (nextHash) {
+        const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`
+        window.history.replaceState(null, '', nextUrl)
+        window.dispatchEvent(new HashChangeEvent('hashchange'))
+        return
+      }
+      window.history.replaceState(null, '', `${parsed.pathname || '/'}${parsed.search || ''}`)
+      return
+    } catch {
+      window.location.assign(toCurrentOriginComboxUrl(raw))
+      return
+    }
+  }
+  if (raw.startsWith('/#') || raw.startsWith('#')) {
+    const hash = raw.startsWith('/#') ? raw.slice(1) : raw
+    const nextUrl = `${window.location.pathname}${window.location.search}${hash}`
+    window.history.replaceState(null, '', nextUrl)
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
     return
   }
   window.open(raw, '_blank', 'noopener,noreferrer')

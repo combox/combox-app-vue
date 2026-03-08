@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from '../../i18n/i18n'
-import EmojiPicker from './EmojiPicker.vue'
 import MessageContextMenu from './MessageContextMenu.vue'
 import MessageBubble from './MessageBubble.vue'
+import ReactionEmojiPicker from './ReactionEmojiPicker.vue'
 import type { ViewMessage } from './chatTypes'
 import type { MessageStatus } from './chatWorkspace.types'
 
@@ -17,6 +17,7 @@ const emit = defineEmits<{
   closeContextMenu: []
   copyContextMessage: []
   replyContextMessage: []
+  editContextMessage: []
   deleteContextMessage: []
   openContextReactionPicker: []
   closeContextReactionPicker: []
@@ -24,6 +25,9 @@ const emit = defineEmits<{
   markRead: [payload: { chatID: string; messageIDs: string[] }]
   nearBottom: [value: boolean]
   openUserInfo: [userID: string]
+  openUsername: [username: string]
+  replyToMessage: [message: ViewMessage]
+  openDiscussion: [message: ViewMessage]
 }>()
 
 const { t } = useI18n()
@@ -32,6 +36,11 @@ const props = defineProps<{
   errorText: string
   messages: ViewMessage[]
   selectedChatID: string
+  isPublicChannel?: boolean
+  discussionMode?: boolean
+  commentsEnabled?: boolean
+  canComment?: boolean
+  canReact?: boolean
   messageSearch: string
   currentUserId: string
   currentUserAvatarSrc?: string
@@ -43,13 +52,23 @@ const props = defineProps<{
   contextReactionAnchor: { x: number; y: number; messageId: string } | null
   mediaOverlayOpen: boolean
   deliveryStatusByMessage: Record<string, MessageStatus>
+  canEditContextMessage?: boolean
+  canDeleteContextMessage?: boolean
 }>()
+
+type MessageThread = {
+  post: ViewMessage
+  comments: ViewMessage[]
+}
 
 const containerRef = ref<HTMLElement | null>(null)
 const isNearBottom = ref(true)
 const newMessagesBelowCount = ref(0)
 const lastMessageCount = ref(0)
 const pendingRestoreChatID = ref(props.selectedChatID)
+const reactionPickerRef = ref<HTMLElement | null>(null)
+const reactionPickerX = ref(0)
+const reactionPickerY = ref(0)
 const scrollIndexByChat = ref(readSavedChatScroll())
 let scrollPersistTimer: number | null = null
 
@@ -143,6 +162,71 @@ function shouldShowAvatar(index: number): boolean {
   return (next.raw.user_id || '').trim() !== currentUserID
 }
 
+function timeText(value: string): string {
+  const parsed = Date.parse(value)
+  if (!Number.isFinite(parsed)) return ''
+  return new Intl.DateTimeFormat(undefined, { month: 'long', day: 'numeric' }).format(new Date(parsed))
+}
+
+async function syncReactionPickerPosition() {
+  if (!props.contextReactionAnchor) return
+  await nextTick()
+  const picker = reactionPickerRef.value
+  if (!picker) {
+    reactionPickerX.value = props.contextReactionAnchor.x
+    reactionPickerY.value = props.contextReactionAnchor.y
+    return
+  }
+  const margin = 8
+  const rect = picker.getBoundingClientRect()
+  const maxX = Math.max(margin, window.innerWidth - rect.width - margin)
+  const maxY = Math.max(margin, window.innerHeight - rect.height - margin)
+  reactionPickerX.value = Math.min(Math.max(props.contextReactionAnchor.x, margin), maxX)
+  reactionPickerY.value = Math.min(Math.max(props.contextReactionAnchor.y, margin), maxY)
+}
+
+const threadedMessages = computed<MessageThread[]>(() => {
+  if (props.discussionMode) {
+    const [root, ...comments] = props.messages
+    if (!root) return []
+    return [{ post: root, comments }]
+  }
+  if (!props.isPublicChannel) {
+    return props.messages.map((message) => ({ post: message, comments: [] }))
+  }
+  const byParent = new Map<string, ViewMessage[]>()
+  const topLevel: ViewMessage[] = []
+  const orphanReplies: ViewMessage[] = []
+  const topLevelIds = new Set<string>()
+
+  for (const message of props.messages) {
+    const parentId = (message.raw.reply_to_message_id || '').trim()
+    if (!parentId) {
+      topLevel.push(message)
+      topLevelIds.add(message.raw.id)
+      continue
+    }
+    const bucket = byParent.get(parentId)
+    if (bucket) bucket.push(message)
+    else byParent.set(parentId, [message])
+  }
+
+  for (const [parentId, items] of byParent.entries()) {
+    if (!topLevelIds.has(parentId)) orphanReplies.push(...items)
+  }
+
+  const threaded = topLevel.map((post) => ({
+    post,
+    comments: (byParent.get(post.raw.id) || []).slice().sort((a, b) => Date.parse(a.raw.created_at) - Date.parse(b.raw.created_at)),
+  }))
+
+  for (const orphan of orphanReplies.sort((a, b) => Date.parse(a.raw.created_at) - Date.parse(b.raw.created_at))) {
+    threaded.push({ post: orphan, comments: [] })
+  }
+
+  return threaded
+})
+
 watch(
   () => props.selectedChatID,
   (chatID, prevChatID) => {
@@ -229,6 +313,14 @@ watch(
     emitMarkRead()
   },
 )
+
+watch(
+  () => props.contextReactionAnchor,
+  () => {
+    void syncReactionPickerPosition()
+  },
+  { deep: true },
+)
 </script>
 
 <template>
@@ -253,13 +345,93 @@ watch(
       </div>
     </template>
 
+    <div v-else-if="discussionMode && threadedMessages.length > 0" class="discussionStack">
+      <div class="discussionRootWrap">
+        <div class="discussionDateChip">{{ timeText(threadedMessages[0].post.raw.created_at) }}</div>
+        <div class="discussionRootCard">
+          <MessageBubble
+            :message="threadedMessages[0].post"
+            :mine="false"
+            :current-user-id="currentUserId"
+            :delivery-status="deliveryStatusByMessage[threadedMessages[0].post.raw.id]?.status"
+            :media-overlay-open="mediaOverlayOpen"
+            :current-user-avatar-src="currentUserAvatarSrc"
+            :avatar-by-user-id="avatarByUserId"
+            :sender-name-by-user-id="senderNameByUserId"
+            :sender-role-by-user-id="senderRoleByUserId"
+            :show-sender-meta="true"
+            :show-sender-avatar="false"
+            :reserve-avatar-space="false"
+            :is-public-channel="false"
+            :comments-enabled="false"
+            :can-comment="false"
+            :can-react="canReact"
+            :is-top-level-post="false"
+            :comment-count="0"
+            @open-image="$emit('openImage', $event)"
+            @open-video="$emit('openVideo', $event)"
+            @open-user-info="$emit('openUserInfo', $event)"
+            @open-username="$emit('openUsername', $event)"
+            @reply-to-message="$emit('replyToMessage', $event)"
+            @open-discussion="$emit('openDiscussion', $event)"
+            @react="$emit('react', $event)"
+            @open-context-menu="$emit('openContextMenu', $event)"
+          />
+        </div>
+        <div class="discussionStarted">{{ t('chat.discussion_started', undefined, 'Discussion started') }}</div>
+      </div>
+
+      <div v-if="threadedMessages[0].comments.length > 0" class="discussionComments">
+        <div
+          v-for="comment in threadedMessages[0].comments"
+          :key="comment.raw.id"
+          class="discussionCommentItem"
+        >
+          <MessageBubble
+            :message="comment"
+            :mine="comment.raw.user_id === currentUserId"
+            :current-user-id="currentUserId"
+            :delivery-status="deliveryStatusByMessage[comment.raw.id]?.status"
+            :media-overlay-open="mediaOverlayOpen"
+            :current-user-avatar-src="currentUserAvatarSrc"
+            :avatar-by-user-id="avatarByUserId"
+            :sender-name-by-user-id="senderNameByUserId"
+            :sender-role-by-user-id="senderRoleByUserId"
+            :show-sender-meta="Boolean(comment.raw.user_id && comment.raw.user_id !== currentUserId)"
+            :show-sender-avatar="Boolean(comment.raw.user_id && comment.raw.user_id !== currentUserId)"
+            :reserve-avatar-space="Boolean(comment.raw.user_id && comment.raw.user_id !== currentUserId)"
+            :is-public-channel="false"
+            :comments-enabled="false"
+            :can-comment="false"
+            :can-react="canReact"
+            :is-top-level-post="false"
+            :comment-count="0"
+            @open-image="$emit('openImage', $event)"
+            @open-video="$emit('openVideo', $event)"
+            @open-user-info="$emit('openUserInfo', $event)"
+            @open-username="$emit('openUsername', $event)"
+            @reply-to-message="$emit('replyToMessage', $event)"
+            @open-discussion="$emit('openDiscussion', $event)"
+            @react="$emit('react', $event)"
+            @open-context-menu="$emit('openContextMenu', $event)"
+          />
+        </div>
+      </div>
+      <div v-else class="discussionEmpty">{{ t('chat.no_comments_yet', undefined, 'No comments here yet...') }}</div>
+    </div>
+
     <div v-else class="messageStack">
-      <div v-for="(message, index) in messages" :key="message.raw.id" class="messageItem">
+      <div
+        v-for="(thread, index) in threadedMessages"
+        :key="thread.post.raw.id"
+        class="messageItem"
+        :class="{ postThread: Boolean(isPublicChannel) && !(thread.post.raw.reply_to_message_id || '').trim() }"
+      >
         <MessageBubble
-          :message="message"
-          :mine="message.raw.user_id === currentUserId"
+          :message="thread.post"
+          :mine="thread.post.raw.user_id === currentUserId"
           :current-user-id="currentUserId"
-          :delivery-status="deliveryStatusByMessage[message.raw.id]?.status"
+          :delivery-status="deliveryStatusByMessage[thread.post.raw.id]?.status"
           :media-overlay-open="mediaOverlayOpen"
           :current-user-avatar-src="currentUserAvatarSrc"
           :avatar-by-user-id="avatarByUserId"
@@ -267,10 +439,19 @@ watch(
           :sender-role-by-user-id="senderRoleByUserId"
           :show-sender-meta="shouldShowSenderHeader(index)"
           :show-sender-avatar="shouldShowAvatar(index)"
-          :reserve-avatar-space="Boolean(showSenderMeta && message.raw.user_id)"
+          :reserve-avatar-space="Boolean(showSenderMeta && thread.post.raw.user_id)"
+          :is-public-channel="Boolean(isPublicChannel)"
+          :comments-enabled="Boolean(commentsEnabled)"
+          :can-comment="Boolean(canComment)"
+          :can-react="canReact"
+          :is-top-level-post="Boolean(isPublicChannel) && !(thread.post.raw.reply_to_message_id || '').trim()"
+          :comment-count="thread.comments.length"
           @open-image="$emit('openImage', $event)"
           @open-video="$emit('openVideo', $event)"
           @open-user-info="$emit('openUserInfo', $event)"
+          @open-username="$emit('openUsername', $event)"
+          @reply-to-message="$emit('replyToMessage', $event)"
+          @open-discussion="$emit('openDiscussion', $event)"
           @react="$emit('react', $event)"
           @open-context-menu="$emit('openContextMenu', $event)"
         />
@@ -288,10 +469,13 @@ watch(
     :open="Boolean(contextMenu)"
     :x="contextMenu?.x || 0"
     :y="contextMenu?.y || 0"
-    :show-delete="contextMenu?.message.raw.user_id === currentUserId"
+    :show-delete="canDeleteContextMessage"
+    :show-edit="canEditContextMessage"
+    :show-react="canReact"
     @close="$emit('closeContextMenu')"
     @copy="$emit('copyContextMessage')"
     @reply="$emit('replyContextMessage')"
+    @edit="$emit('editContextMessage')"
     @delete="$emit('deleteContextMessage')"
     @react="
       (emoji) => {
@@ -305,11 +489,12 @@ watch(
   <Teleport to="body">
     <div
       v-if="contextReactionAnchor"
+      ref="reactionPickerRef"
       class="reactionPickerPopover"
-      :style="{ left: `${contextReactionAnchor.x}px`, top: `${contextReactionAnchor.y}px` }"
+      :style="{ left: `${reactionPickerX}px`, top: `${reactionPickerY}px` }"
       @click.stop
     >
-      <EmojiPicker
+      <ReactionEmojiPicker
         :open="Boolean(contextReactionAnchor)"
         @select="
           (emoji) => {
@@ -377,6 +562,108 @@ watch(
   display: grid;
   gap: 10px;
   align-content: start;
+}
+
+.messageItem {
+  content-visibility: auto;
+  contain-intrinsic-size: 220px;
+}
+
+.discussionStack {
+  padding: 18px 18px 96px;
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+.discussionRootWrap {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.discussionDateChip,
+.discussionStarted {
+  justify-self: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: rgba(15, 23, 42, 0.72);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.discussionRootCard {
+  max-width: min(560px, 100%);
+}
+
+.discussionComments {
+  display: grid;
+  gap: 10px;
+}
+
+.discussionCommentItem {
+  display: grid;
+  align-content: start;
+}
+
+.discussionEmpty {
+  justify-self: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: rgba(15, 23, 42, 0.72);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.postThread {
+  display: grid;
+  gap: 0;
+}
+
+.commentThread {
+  margin-top: 8px;
+  margin-left: 18px;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.commentThreadLine {
+  width: 2px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.18);
+  justify-self: center;
+}
+
+.commentThreadItems {
+  display: grid;
+  gap: 8px;
+}
+
+.commentThreadHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+
+.commentThreadCount {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(15, 23, 42, 0.6);
+}
+
+.commentThreadToggle {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #3b82f6;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .emptyState {
@@ -450,9 +737,13 @@ watch(
   position: fixed;
   z-index: 10001;
   margin-top: 8px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
   border: 1px solid rgba(0, 0, 0, 0.12);
   background: #fff;
+  border-radius: 14px;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
 }
 
 </style>

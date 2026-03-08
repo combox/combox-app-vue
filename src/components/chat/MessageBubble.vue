@@ -21,6 +21,12 @@ const props = defineProps<{
   showSenderMeta?: boolean
   showSenderAvatar?: boolean
   reserveAvatarSpace?: boolean
+  isPublicChannel?: boolean
+  commentsEnabled?: boolean
+  canComment?: boolean
+  canReact?: boolean
+  isTopLevelPost?: boolean
+  commentCount?: number
 }>()
 
 const emit = defineEmits<{
@@ -29,12 +35,16 @@ const emit = defineEmits<{
   react: [payload: { messageID: string; emoji: string }]
   openContextMenu: [payload: { x: number; y: number; message: ViewMessage }]
   openUserInfo: [userID: string]
+  openUsername: [username: string]
+  replyToMessage: [message: ViewMessage]
+  openDiscussion: [message: ViewMessage]
 }>()
 
 const { t } = useI18n()
 const visibleText = computed(() => props.message.text || '')
 const showText = computed(() => Boolean(visibleText.value.trim()))
 const timeText = computed(() => formatMessageTime(props.message.raw.created_at))
+const isEdited = computed(() => Boolean((props.message.raw.edited_at || '').trim()))
 const normalizedDeliveryStatus = computed(() => (props.deliveryStatus || '').trim().toLowerCase())
 const senderUserID = computed(() => (props.message.raw.user_id || '').trim())
 const senderAvatar = computed(() => normalizeAvatarSrc((props.avatarByUserId || {})[senderUserID.value] || ''))
@@ -53,6 +63,9 @@ const isImageOnly = computed(
   () => !showText.value && props.message.attachments.length > 0 && props.message.attachments.every((item) => item.kind === 'image'),
 )
 const hasVideoAttachment = computed(() => props.message.attachments.some((item) => item.kind === 'video'))
+const showCommentAction = computed(() =>
+  Boolean(props.isPublicChannel && props.commentsEnabled && props.isTopLevelPost),
+)
 const linkItems = computed(() => {
   const re = /\b((?:https?:\/\/|www\.)[^\s<>"'`]+)\b/gi
   const found = new Set<string>()
@@ -77,6 +90,7 @@ const textHtml = computed(() => {
       const rel = combox ? '' : ' rel="noreferrer noopener"'
       return `<a class="mbLink" href="${href}" target="${target}"${rel}>${raw}</a>`
     })
+    .replace(/(^|[\s([{\u00A0>])@([a-zA-Z0-9_]{3,32})/g, (_match, prefix, username) => `${prefix}<a class="mbUserRef" href="/@${username}" data-username="${username}">@${username}</a>`)
     .replace(/\n/g, '<br>')
 })
 
@@ -102,11 +116,23 @@ function openSenderInfo() {
 function onBubbleClick(event: MouseEvent) {
   const target = event.target as HTMLElement | null
   const anchor = target?.closest('a.mbLink') as HTMLAnchorElement | null
-  if (!anchor) return
-  const href = (anchor.getAttribute('href') || '').trim()
-  if (!href || !isComboxUrl(href)) return
+  if (anchor) {
+    const href = (anchor.getAttribute('href') || '').trim()
+    if (!href || !isComboxUrl(href)) return
+    event.preventDefault()
+    openComboxAwareUrl(href)
+    return
+  }
+  const userRef = target?.closest('a.mbUserRef') as HTMLAnchorElement | null
+  if (!userRef) return
+  const username = (userRef.dataset.username || '').trim()
+  if (!username) return
   event.preventDefault()
-  openComboxAwareUrl(href)
+  emit('openUsername', username)
+}
+
+function startComment() {
+  emit('openDiscussion', props.message)
 }
 </script>
 
@@ -135,7 +161,7 @@ function onBubbleClick(event: MouseEvent) {
           class="mbGalleryItem"
           @click="attachment.url && $emit('openImage', attachment.url)"
         >
-          <img class="mbGalleryImage" :src="attachment.url || attachment.previewUrl" :alt="attachment.filename || 'image'" />
+          <img class="mbGalleryImage" :src="attachment.url || attachment.previewUrl" :alt="attachment.filename || 'image'" loading="lazy" decoding="async" />
         </button>
       </div>
 
@@ -151,6 +177,12 @@ function onBubbleClick(event: MouseEvent) {
       </template>
 
       <footer class="mbMeta mbMetaMedia">
+        <v-icon
+          v-if="isEdited"
+          icon="mdi-pencil"
+          size="12"
+          class="mbEditedIcon"
+        />
         <span>{{ timeText }}</span>
         <v-icon
           v-if="mine"
@@ -178,8 +210,8 @@ function onBubbleClick(event: MouseEvent) {
       <div v-if="hasReply" class="mbReply">
         <div class="mbReplyAccent" aria-hidden="true" />
         <div class="mbReplyBody">
-          <div class="mbReplySender">{{ replySender || 'Reply' }}</div>
-          <div class="mbReplyPreview">{{ replyPreview || 'Message' }}</div>
+          <div class="mbReplySender">{{ replySender || t('chat.reply') }}</div>
+          <div class="mbReplyPreview">{{ replyPreview || t('chat.message') }}</div>
         </div>
       </div>
 
@@ -206,7 +238,7 @@ function onBubbleClick(event: MouseEvent) {
               class="mbGalleryItem"
               @click="attachment.url && $emit('openImage', attachment.url)"
             >
-              <img class="mbGalleryImage" :src="attachment.url || attachment.previewUrl" :alt="attachment.filename || 'image'" />
+              <img class="mbGalleryImage" :src="attachment.url || attachment.previewUrl" :alt="attachment.filename || 'image'" loading="lazy" decoding="async" />
             </button>
           </div>
         </template>
@@ -223,6 +255,12 @@ function onBubbleClick(event: MouseEvent) {
       </div>
 
       <footer class="mbMeta">
+        <v-icon
+          v-if="isEdited"
+          icon="mdi-pencil"
+          size="12"
+          class="mbEditedIcon"
+        />
         <span>{{ timeText }}</span>
         <v-icon
           v-if="mine"
@@ -238,8 +276,22 @@ function onBubbleClick(event: MouseEvent) {
         :current-user-id="currentUserId"
         :current-user-avatar-src="currentUserAvatarSrc"
         :avatar-by-user-id="avatarByUserId"
+        :can-react="canReact"
         @react="onReact"
       />
+      <button v-if="showCommentAction" type="button" class="mbCommentFooter" @click.stop="startComment">
+        <span class="mbCommentFooterLeft">
+          <v-icon icon="mdi-comment-outline" size="16" />
+          <span class="mbCommentFooterText">
+            {{
+              (props.commentCount || 0) > 0
+                ? t('chat.comments_count', { count: props.commentCount || 0 }, `${props.commentCount || 0} comments`)
+                : t('chat.leave_comment', undefined, 'Leave a comment')
+            }}
+          </span>
+        </span>
+        <v-icon icon="mdi-chevron-right" size="18" />
+      </button>
       </article>
     </div>
   </div>
@@ -270,6 +322,34 @@ function onBubbleClick(event: MouseEvent) {
   border: 1px solid var(--border);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
   color: var(--text);
+}
+
+.mbCommentFooter {
+  width: calc(100% + 24px);
+  margin: 10px -12px -8px;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0 0 14px 8px;
+  background: rgba(15, 23, 42, 0.04);
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.mbCommentFooterLeft {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mbCommentFooterText {
+  line-height: 1.1;
 }
 
 .mbMain {
@@ -478,6 +558,11 @@ function onBubbleClick(event: MouseEvent) {
 
 .mbStatusSent {
   color: var(--text-muted);
+}
+
+.mbEditedIcon {
+  color: var(--text-muted);
+  opacity: 0.82;
 }
 
 .mbStatusRead {

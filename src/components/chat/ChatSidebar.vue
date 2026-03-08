@@ -17,6 +17,7 @@ import {
   verifyOldEmailCode,
 } from 'combox-api'
 import { computed, defineComponent, ref, watch, type PropType } from 'vue'
+import { useI18n } from '../../i18n/i18n'
 import ChatSidebarChatsPane from './ChatSidebarChatsPane.vue'
 import ChatSidebarSettingsPane from './ChatSidebarSettingsPane.vue'
 import ChatSidebarTopicsPane from './ChatSidebarTopicsPane.vue'
@@ -60,11 +61,14 @@ export default defineComponent({
     'closeSettings',
     'createGroup',
     'createChannel',
+    'selectDirectoryChat',
+    'selectDirectoryUser',
     'closeGroupChannels',
     'selectGroupChannel',
     'createGroupChannel',
   ],
   setup(props, { emit }) {
+    const { t } = useI18n()
     const lastAttachmentPreviewById = ref<Record<string, AttachmentThumb>>({})
     const requestedAttachmentIDs = new Set<string>()
     const createMenuOpen = ref(false)
@@ -72,7 +76,7 @@ export default defineComponent({
     const settingsSaving = ref(false)
     const settingsError = ref('')
     const settingsSuccess = ref('')
-    const createDialog = ref<{ open: boolean; kind: 'group' | 'channel'; title: string; saving: boolean; error: string }>({ open: false, kind: 'group', title: '', saving: false, error: '' })
+    const createDialog = ref<{ open: boolean; kind: 'group' | 'channel'; title: string; slug: string; isPublic: boolean; avatarDataUrl: string | null; saving: boolean; error: string }>({ open: false, kind: 'group', title: '', slug: '', isPublic: true, avatarDataUrl: null, saving: false, error: '' })
     const createMemberQuery = ref('')
     const createMemberResults = ref<SearchUserResult[]>([])
     const createMemberIDs = ref<string[]>([])
@@ -122,23 +126,41 @@ export default defineComponent({
 
     function onOpenSettings() { createMenuOpen.value = false; void loadSettings(); emit('openSettings') }
     function onCloseSettings() { emit('closeSettings') }
-    function onCreateGroup() { createMenuOpen.value = false; createDialog.value = { open: true, kind: 'group', title: '', saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = [] }
-    function onCreateChannel() { createMenuOpen.value = false; if (!props.canCreateChannel) return; createDialog.value = { open: true, kind: 'channel', title: '', saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = [] }
-    function closeCreateDialog() { createDialog.value = { open: false, kind: createDialog.value.kind, title: '', saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = []; createMemberBusy.value = false }
+    function onCreateGroup() { createMenuOpen.value = false; createDialog.value = { open: true, kind: 'group', title: '', slug: '', isPublic: true, avatarDataUrl: null, saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = [] }
+    function onCreateChannel() { createMenuOpen.value = false; createDialog.value = { open: true, kind: 'channel', title: '', slug: '', isPublic: true, avatarDataUrl: null, saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = [] }
+    function closeCreateDialog() { createDialog.value = { open: false, kind: createDialog.value.kind, title: '', slug: '', isPublic: true, avatarDataUrl: null, saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = []; createMemberBusy.value = false }
+    function pickCreateAvatar() {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = 'image/*'
+      input.onchange = () => {
+        const file = input.files?.[0]
+        if (!file) return
+        const reader = new FileReader()
+        reader.onload = () => {
+          const result = typeof reader.result === 'string' ? reader.result : ''
+          if (!result) return
+          createDialog.value = { ...createDialog.value, avatarDataUrl: result }
+        }
+        reader.readAsDataURL(file)
+      }
+      input.click()
+    }
     function addCreateMember(user: SearchUserResult) { if (!user.id || createMemberIDs.value.includes(user.id) || user.id === props.currentUserId) return; createMemberIDs.value = [...createMemberIDs.value, user.id]; if (!createMemberResults.value.some((item) => item.id === user.id)) createMemberResults.value = [...createMemberResults.value, user]; createMemberQuery.value = '' }
     function removeCreateMember(userID: string) { createMemberIDs.value = createMemberIDs.value.filter((id) => id !== userID) }
     function openTopicCreate() { if (!props.canCreateChannel) return; topicCreateOpen.value = true; topicCreateTitle.value = ''; topicCreateType.value = 'text'; topicCreateError.value = '' }
     function closeTopicCreate() { topicCreateOpen.value = false; topicCreateTitle.value = ''; topicCreateType.value = 'text'; topicCreateError.value = '' }
-    function submitTopicCreate() { const title = topicCreateTitle.value.trim(); if (!title) { topicCreateError.value = 'Topic name is required'; return } emit('createGroupChannel', { title, channel_type: topicCreateType.value }); closeTopicCreate() }
+    function submitTopicCreate() { const title = topicCreateTitle.value.trim(); if (!title) { topicCreateError.value = t('chat.topic_name_required'); return } emit('createGroupChannel', { title, channel_type: topicCreateType.value }); closeTopicCreate() }
 
     async function submitCreateDialog() {
       const title = createDialog.value.title.trim()
-      if (!title) { createDialog.value = { ...createDialog.value, error: 'Title is required' }; return }
-      if (createDialog.value.kind === 'group' && createMemberIDs.value.length === 0) { createDialog.value = { ...createDialog.value, error: 'Add at least one participant' }; return }
+      if (!title) { createDialog.value = { ...createDialog.value, error: t('chat.title_required') }; return }
+      if (createDialog.value.kind === 'group' && createMemberIDs.value.length === 0) { createDialog.value = { ...createDialog.value, error: t('chat.add_participant_required') }; return }
+      if (createDialog.value.kind === 'channel' && createDialog.value.isPublic && !createDialog.value.slug.trim()) { createDialog.value = { ...createDialog.value, error: t('chat.public_link_required') }; return }
       createDialog.value = { ...createDialog.value, saving: true, error: '' }
-      const payload = { title, memberIDs: createDialog.value.kind === 'group' ? createMemberIDs.value.slice() : [], onSuccess: () => closeCreateDialog(), onError: (message: string) => { createDialog.value = { ...createDialog.value, saving: false, error: message || 'Request failed' } } }
+      const payload = { title, memberIDs: createDialog.value.kind === 'group' ? createMemberIDs.value.slice() : [], onSuccess: () => closeCreateDialog(), onError: (message: string) => { createDialog.value = { ...createDialog.value, saving: false, error: message || t('chat.request_failed') } } }
       if (createDialog.value.kind === 'group') emit('createGroup', payload)
-      else emit('createChannel', payload)
+      else emit('createChannel', { ...payload, publicSlug: createDialog.value.slug.trim(), isPublic: createDialog.value.isPublic, avatarDataUrl: createDialog.value.avatarDataUrl })
     }
 
     let createMemberTimer: number | null = null
@@ -150,7 +172,7 @@ export default defineComponent({
       createMemberTimer = window.setTimeout(async () => {
         createMemberBusy.value = true
         try {
-          const found = await searchDirectory({ q: clean, scope: 'users', limit: 20 })
+          const found = await searchDirectory({ q: clean, scope: 'all', limit: 20 })
           const merged = [...selectedCreateMembers.value]
           for (const user of found.users || []) if (!merged.some((item) => item.id === user.id) && user.id !== props.currentUserId) merged.push(user)
           createMemberResults.value = merged
@@ -173,7 +195,7 @@ export default defineComponent({
         const ttlSec = Number(profile.session_idle_ttl_seconds || 0)
         if (ttlSec > 0) sessionIdleDays.value = Math.max(1, Math.round(ttlSec / 86400))
       } catch (error) {
-        settingsError.value = error instanceof Error ? error.message : 'Failed to load settings'
+        settingsError.value = error instanceof Error ? error.message : t('settings.load_failed')
       } finally { settingsLoading.value = false }
     }
     async function saveProfileSettings() {
@@ -186,23 +208,23 @@ export default defineComponent({
           birth_date: profileDraft.value.birth_date.trim() || undefined,
         })
         await updateSessionIdleTTL(Math.max(1, Math.round(sessionIdleDays.value)) * 86400)
-        await forceRefreshSession(); await loadSettings(); settingsSuccess.value = 'Profile updated'
-      } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to save profile' } finally { settingsSaving.value = false }
+        await forceRefreshSession(); await loadSettings(); settingsSuccess.value = t('settings.profile_saved')
+      } catch (error) { settingsError.value = error instanceof Error ? error.message : t('settings.profile_update_failed') } finally { settingsSaving.value = false }
     }
     async function savePassword() {
       passwordSaving.value = true; settingsError.value = ''; settingsSuccess.value = ''
-      try { await changePassword(passwordDraft.value.current, passwordDraft.value.next); passwordDraft.value = { current: '', next: '' }; settingsSuccess.value = 'Password changed' }
-      catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to change password' }
+      try { await changePassword(passwordDraft.value.current, passwordDraft.value.next); passwordDraft.value = { current: '', next: '' }; settingsSuccess.value = t('settings.password_changed') }
+      catch (error) { settingsError.value = error instanceof Error ? error.message : t('settings.verify_code_failed') }
       finally { passwordSaving.value = false }
     }
-    async function startEmailFlow() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { await startEmailChange(); emailStep.value='old'; settingsSuccess.value='Code sent to current email' } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to start email change' } finally { emailBusy.value = false } }
-    async function verifyOldCode() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { const ok = await verifyOldEmailCode(emailDraft.value.oldCode.trim()); if (!ok) throw new Error('Invalid old email code'); emailStep.value='new'; settingsSuccess.value='Old email verified' } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to verify old email code' } finally { emailBusy.value = false } }
-    async function sendNewEmailCodeStep() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { await sendNewEmailCode(emailDraft.value.email.trim()); emailStep.value='confirm'; settingsSuccess.value='Code sent to new email' } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to send code to new email' } finally { emailBusy.value = false } }
-    async function confirmNewEmailStep() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { await confirmEmailChange(emailDraft.value.newCode.trim()); emailDraft.value = { email:'', oldCode:'', newCode:'' }; emailStep.value='old'; settingsSuccess.value='Email changed' } catch (error) { settingsError.value = error instanceof Error ? error.message : 'Failed to confirm new email' } finally { emailBusy.value = false } }
+    async function startEmailFlow() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { await startEmailChange(); emailStep.value='old'; settingsSuccess.value=t('settings.code_sent_current') } catch (error) { settingsError.value = error instanceof Error ? error.message : t('settings.start_email_change_failed') } finally { emailBusy.value = false } }
+    async function verifyOldCode() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { const ok = await verifyOldEmailCode(emailDraft.value.oldCode.trim()); if (!ok) throw new Error(t('settings.invalid_old_email_code')); emailStep.value='new'; settingsSuccess.value=t('settings.old_email_verified') } catch (error) { settingsError.value = error instanceof Error ? error.message : t('settings.verify_old_email_code_failed') } finally { emailBusy.value = false } }
+    async function sendNewEmailCodeStep() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { await sendNewEmailCode(emailDraft.value.email.trim()); emailStep.value='confirm'; settingsSuccess.value=t('settings.code_sent_new') } catch (error) { settingsError.value = error instanceof Error ? error.message : t('settings.send_new_email_code_failed') } finally { emailBusy.value = false } }
+    async function confirmNewEmailStep() { emailBusy.value = true; settingsError.value=''; settingsSuccess.value=''; try { await confirmEmailChange(emailDraft.value.newCode.trim()); emailDraft.value = { email:'', oldCode:'', newCode:'' }; emailStep.value='old'; settingsSuccess.value=t('settings.email_changed') } catch (error) { settingsError.value = error instanceof Error ? error.message : t('settings.confirm_new_email_failed') } finally { emailBusy.value = false } }
 
     watch(() => props.sidebarPanel, (panel) => { if (panel === 'settings') void loadSettings() }, { immediate: true })
 
-    return { emit, createMenuOpen, settingsLoading, settingsSaving, settingsError, settingsSuccess, createDialog, createMemberQuery, createMemberResults, createMemberIDs, createMemberBusy, profileDraft, sessionIdleDays, passwordDraft, passwordSaving, emailDraft, emailStep, emailBusy, topicCreateOpen, topicCreateTitle, topicCreateType, topicCreateError, showDirectory, filteredDirectoryUsers, visibleCreateMemberResults, lastAttachmentPreviewById, onOpenSettings, onCloseSettings, onCreateGroup, onCreateChannel, closeCreateDialog, submitCreateDialog, addCreateMember, removeCreateMember, saveProfileSettings, savePassword, startEmailFlow, verifyOldCode, sendNewEmailCodeStep, confirmNewEmailStep, openTopicCreate, closeTopicCreate, submitTopicCreate }
+    return { t, emit, createMenuOpen, settingsLoading, settingsSaving, settingsError, settingsSuccess, createDialog, createMemberQuery, createMemberResults, createMemberIDs, createMemberBusy, profileDraft, sessionIdleDays, passwordDraft, passwordSaving, emailDraft, emailStep, emailBusy, topicCreateOpen, topicCreateTitle, topicCreateType, topicCreateError, showDirectory, filteredDirectoryUsers, visibleCreateMemberResults, lastAttachmentPreviewById, onOpenSettings, onCloseSettings, onCreateGroup, onCreateChannel, closeCreateDialog, submitCreateDialog, addCreateMember, removeCreateMember, pickCreateAvatar, saveProfileSettings, savePassword, startEmailFlow, verifyOldCode, sendNewEmailCodeStep, confirmNewEmailStep, openTopicCreate, closeTopicCreate, submitTopicCreate }
   },
 })
 </script>
@@ -267,6 +289,8 @@ export default defineComponent({
           @create-group="onCreateGroup"
           @create-channel="onCreateChannel"
           @select-chat="emit('select', $event)"
+          @select-directory-chat="emit('selectDirectoryChat', $event)"
+          @select-directory-user="emit('selectDirectoryUser', $event)"
         />
       </div>
 
@@ -299,6 +323,8 @@ export default defineComponent({
           @create-group="onCreateGroup"
           @create-channel="onCreateChannel"
           @select-chat="emit('select', $event)"
+          @select-directory-chat="emit('selectDirectoryChat', $event)"
+          @select-directory-user="emit('selectDirectoryUser', $event)"
         />
       </div>
 
@@ -337,11 +363,24 @@ export default defineComponent({
 
     <div v-if="createDialog.open" class="sbDialogOverlay" @click.self="closeCreateDialog">
       <div class="sbDialog">
-        <div class="sbDialogTitle">{{ createDialog.kind === 'group' ? 'Create group' : 'Create channel' }}</div>
-        <div class="sbDialogText">{{ createDialog.kind === 'group' ? 'Enter the group title.' : 'Enter the channel title.' }}</div>
-        <input v-model="createDialog.title" class="sbFieldInput sbDialogInput" :placeholder="createDialog.kind === 'group' ? 'Group title' : 'Channel title'" :disabled="createDialog.saving" @keydown.enter="submitCreateDialog" />
+        <div class="sbDialogTitle">{{ createDialog.kind === 'group' ? t('chat.create_group') : t('chat.create_channel') }}</div>
+        <div class="sbDialogText">{{ createDialog.kind === 'group' ? t('chat.enter_group_title') : t('chat.enter_channel_title') }}</div>
+        <template v-if="createDialog.kind === 'channel'">
+          <button type="button" class="sbAvatarPicker" @click="pickCreateAvatar">
+            <img v-if="createDialog.avatarDataUrl" :src="createDialog.avatarDataUrl" alt="" class="sbAvatarPickerImg" />
+            <div v-else class="sbAvatarPickerFallback">{{ (createDialog.title || 'C').slice(0, 1).toUpperCase() }}</div>
+          </button>
+        </template>
+        <input v-model="createDialog.title" class="sbFieldInput sbDialogInput" :placeholder="createDialog.kind === 'group' ? t('chat.group_title') : t('chat.channel_title')" :disabled="createDialog.saving" @keydown.enter="submitCreateDialog" />
+        <template v-if="createDialog.kind === 'channel'">
+          <div class="sbTypeSwitch">
+            <button type="button" class="sbTypeBtn" :class="{ active: createDialog.isPublic }" @click="createDialog = { ...createDialog, isPublic: true }">{{ t('chat.public') }}</button>
+            <button type="button" class="sbTypeBtn" :class="{ active: !createDialog.isPublic }" @click="createDialog = { ...createDialog, isPublic: false }">{{ t('chat.private') }}</button>
+          </div>
+          <input v-if="createDialog.isPublic" v-model="createDialog.slug" class="sbFieldInput sbDialogInput" :placeholder="t('chat.public_link')" :disabled="createDialog.saving" @keydown.enter="submitCreateDialog" />
+        </template>
         <template v-if="createDialog.kind === 'group'">
-          <input v-model="createMemberQuery" class="sbFieldInput sbDialogInput" placeholder="Add participants" :disabled="createDialog.saving" />
+          <input v-model="createMemberQuery" class="sbFieldInput sbDialogInput" :placeholder="t('chat.add_participants')" :disabled="createDialog.saving" />
           <div v-if="visibleCreateMemberResults.length > 0" class="sbDialogUsers">
             <button v-for="user in visibleCreateMemberResults" :key="user.id" type="button" class="sbDialogUser" @click="addCreateMember(user)">
               <div class="sbDialogUserName">{{ `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.username }}</div>
@@ -351,8 +390,8 @@ export default defineComponent({
         </template>
         <div v-if="createDialog.error" class="sbDialogError">{{ createDialog.error }}</div>
         <div class="sbDialogActions">
-          <button type="button" class="sbDialogBtn muted" :disabled="createDialog.saving" @click="closeCreateDialog">Cancel</button>
-          <button type="button" class="sbDialogBtn" :disabled="createDialog.saving" @click="submitCreateDialog">{{ createDialog.saving ? 'Creating...' : 'Create' }}</button>
+          <button type="button" class="sbDialogBtn muted" :disabled="createDialog.saving" @click="closeCreateDialog">{{ t('common.cancel') }}</button>
+          <button type="button" class="sbDialogBtn" :disabled="createDialog.saving" @click="submitCreateDialog">{{ createDialog.saving ? t('chat.creating') : t('chat.create') }}</button>
         </div>
       </div>
     </div>
@@ -448,8 +487,14 @@ export default defineComponent({
 .sbDialogUser { width:100%; padding:8px; border:1px solid rgba(0,0,0,.1); border-radius:6px; background:#fff; text-align:left; cursor:pointer; }
 .sbDialogUserName { font-size:13px; font-weight:700; color:rgba(0,0,0,.86); }
 .sbDialogUserMeta { font-size:12px; color:rgba(0,0,0,.56); }
+.sbAvatarPicker { width:88px; height:88px; margin:0 auto 2px; padding:0; border:0; border-radius:50%; overflow:hidden; background:transparent; appearance:none; -webkit-appearance:none; display:grid; place-items:center; cursor:pointer; }
+.sbAvatarPickerImg { width:100%; height:100%; object-fit:cover; display:block; }
+.sbAvatarPickerFallback { width:100%; height:100%; border-radius:50%; display:grid; place-items:center; background:#7ea8d4; color:#fff; font-size:32px; font-weight:700; }
 .sbDialogError { font-size:12px; color:#c62828; }
 .sbDialogActions { display:flex; justify-content:flex-end; gap:8px; }
 .sbDialogBtn { min-width:86px; height:34px; border:0; border-radius:6px; background:#1976d2; color:#fff; font-size:13px; font-weight:600; cursor:pointer; }
 .sbDialogBtn.muted { background:rgba(0,0,0,.08); color:rgba(0,0,0,.72); }
+.sbTypeSwitch { display:flex; gap:8px; }
+.sbTypeBtn { flex:1 1 0; height:34px; border:1px solid rgba(0,0,0,.12); border-radius:999px; background:#fff; color:rgba(0,0,0,.68); font-size:13px; font-weight:600; cursor:pointer; }
+.sbTypeBtn.active { background:#1976d2; border-color:#1976d2; color:#fff; }
 </style>

@@ -41,6 +41,7 @@ module.exports = (env, argv) => {
       extensions: ['.ts', '.tsx', '.js', '.jsx', '.vue', '.json'],
       alias: {
         '@': path.resolve(root, 'src'),
+        'combox-api': path.resolve(root, '../combox-api/src/index.ts'),
       },
     },
     module: {

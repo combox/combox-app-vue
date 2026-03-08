@@ -2,18 +2,24 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from '../../i18n/i18n'
 import {
   acceptChatInvite,
+  acceptChannelInviteLink,
   addChatMembers,
+  createChatInviteLink,
+  createPublicChannel,
   createChannel,
   createChat,
   deleteMessage,
+  editMessage,
   encodeAttachmentToken,
   getAttachment,
+  getChat,
   getUserByID,
   ComboxClient,
   getCurrentUser,
   getLocalProfile,
   getProfileSettings,
   listChatMembers,
+  listChatInviteLinks,
   listChannels,
   listChats,
   listMessages,
@@ -24,9 +30,12 @@ import {
   searchDirectory,
   sendMessage,
   setChatMuted,
+  subscribePublicChannel,
   toggleMessageReaction,
+  unsubscribePublicChannel,
   updateChat,
   updateChatMemberRole,
+  type ChatInviteLink,
   type ChatItem,
   type ChatMemberProfile,
   type MessageItem,
@@ -54,6 +63,8 @@ import {
   readChatIdFromHash,
   readChatSelectionFromHash,
   readInviteTokenFromHash,
+  readInviteLinkTokenFromHash,
+  readPublicSlugFromHash,
   setHashToChatId,
   setHashToChatSelection,
 } from './chatWorkspace.hash'
@@ -75,6 +86,7 @@ import type {
 
 const attachmentRequests = new Map<string, Promise<void>>()
 const presenceClient = new ComboxClient()
+const directChatClient = new ComboxClient()
 
 export function useChatWorkspace() {
   const { t } = useI18n()
@@ -133,6 +145,7 @@ export function useChatWorkspace() {
   const contextMenu = ref<{ x: number; y: number; message: ViewMessage } | null>(null)
   const contextReactionAnchor = ref<{ x: number; y: number; messageId: string } | null>(null)
   const replyToMessage = ref<ViewMessage | null>(null)
+  const editingMessage = ref<ViewMessage | null>(null)
   const photoViewerSrc = ref('')
   const videoViewer = ref<{ attachmentID: string; src: string; poster?: string; filename?: string } | null>(null)
   const infoOpen = ref(false)
@@ -140,6 +153,9 @@ export function useChatWorkspace() {
   const peerProfile = ref<PeerProfile | null>(null)
   const focusedInfoUserProfile = ref<PeerProfile | null>(null)
   const chatMembers = ref<ChatMemberProfile[]>([])
+  const removedChatMembers = ref<ChatMemberProfile[]>([])
+  const selectedChatInviteLinks = ref<ChatInviteLink[]>([])
+  const invitePreviewChat = ref<ChatItem | null>(null)
   const groupChannelsByGroupID = ref<Record<string, ChatItem[]>>(cachedGroupChannelsByGroupID)
   const loadingGroupChannels = ref(false)
   const loadingChats = ref(false)
@@ -161,7 +177,7 @@ export function useChatWorkspace() {
   let presencePingTimer: number | null = null
   let lastPresencePingAt = 0
 
-  const selectedChat = computed(() => chats.value.find((chat) => chat.id === selectedChatID.value) || null)
+  const selectedChat = computed(() => chats.value.find((chat) => chat.id === selectedChatID.value) || invitePreviewChat.value || null)
   const activeGroupID = computed(() => {
     const active = selectedChat.value
     if (!active) return ''
@@ -353,6 +369,10 @@ export function useChatWorkspace() {
   const chatSubtitle = computed(() => {
     if (!selectedChat.value) return ''
     if (!selectedChat.value.is_direct) {
+      if ((selectedChat.value.kind || '').trim() === 'public_channel') {
+        const count = Number(selectedChat.value.subscriber_count || chatMembers.value.length || 0)
+        return count > 0 ? t('chat.subscribers', { count }, `${count} subscribers`) : ''
+      }
       const count = chatMembers.value.length
       return count > 0 ? t('chat.participants', { count }, `${count} participants`) : ''
     }
@@ -392,8 +412,52 @@ export function useChatWorkspace() {
       chatMembers.value = []
       return
     }
-    const items = await listChatMembers(cleanChatID)
-    chatMembers.value = await enrichChatMembers(items)
+    try {
+      const items = await listChatMembers(cleanChatID)
+      chatMembers.value = await enrichChatMembers(items)
+    } catch {
+      chatMembers.value = []
+    }
+  }
+
+  async function refreshRemovedChatMembers(chatID: string) {
+    const cleanChatID = (chatID || '').trim()
+    if (!cleanChatID) {
+      removedChatMembers.value = []
+      return
+    }
+    try {
+      const items = await listChatMembers(cleanChatID, { include_banned: true })
+      const banned = items.filter((item) => ((item.role || '').trim().toLowerCase()) === 'banned')
+      removedChatMembers.value = await enrichChatMembers(banned)
+    } catch {
+      removedChatMembers.value = []
+    }
+  }
+
+  async function refreshSelectedChatInviteLinks(chatIDRaw: string) {
+    const chatID = (chatIDRaw || '').trim()
+    if (!chatID) {
+      selectedChatInviteLinks.value = []
+      return
+    }
+    try {
+      selectedChatInviteLinks.value = await listChatInviteLinks(chatID)
+    } catch {
+      selectedChatInviteLinks.value = []
+    }
+  }
+
+  async function refreshSelectedPublicChannel(chatIDRaw: string) {
+    const chatID = (chatIDRaw || '').trim()
+    if (!chatID) return
+    try {
+      const chat = await getChat(chatID)
+      patchChatLocally(chatID, chat)
+      if (invitePreviewChat.value?.id === chatID) invitePreviewChat.value = chat
+    } catch {
+      // keep current preview state
+    }
   }
 
   const { start, stop, sendRequest, sendEvent } = useChatRealtime({
@@ -542,12 +606,13 @@ export function useChatWorkspace() {
       }
 
       chats.value = result
-      writeJSON(CHATS_CACHE_KEY, result)
+      writeJSON(CHATS_CACHE_KEY, chats.value)
 
       const fromHash = readChatIdFromHash(PENDING_CHAT_PREFIX)
+      const hasChatById = (id: string) => chats.value.some((chat) => chat.id === id) || invitePreviewChat.value?.id === id
       const nextSelected =
-        (fromHash && result.some((chat) => chat.id === fromHash) && fromHash) ||
-        (selectedChatID.value && result.some((chat) => chat.id === selectedChatID.value) && selectedChatID.value) ||
+        (fromHash && hasChatById(fromHash) && fromHash) ||
+        (selectedChatID.value && hasChatById(selectedChatID.value) && selectedChatID.value) ||
         ''
 
       if (selectedChatID.value !== nextSelected) selectedChatID.value = nextSelected
@@ -748,6 +813,7 @@ export function useChatWorkspace() {
       return
     }
     selectedChatID.value = chatID
+    invitePreviewChat.value = chats.value.find((chat) => chat.id === chatID) || invitePreviewChat.value
     focusedInfoUserProfile.value = null
     replyToMessage.value = null
     messageSearchOpen.value = false
@@ -771,6 +837,82 @@ export function useChatWorkspace() {
     } else {
       groupChannelsOpen.value = false
     }
+  }
+
+  async function selectDirectoryChat(chat: Partial<ChatItem> & { id: string; title: string; kind?: string }) {
+    const chatID = (chat.id || '').trim()
+    if (!chatID) return
+    const normalizedChat = {
+      id: chatID,
+      title: (chat.title || '').trim() || 'Channel',
+      is_direct: false,
+      type: chat.type || 'standard',
+      kind: chat.kind || 'public_channel',
+      is_public: chat.is_public ?? ((chat.kind || '').trim() === 'public_channel'),
+      public_slug: chat.public_slug,
+      viewer_role: chat.viewer_role,
+      subscriber_count: chat.subscriber_count,
+      avatar_data_url: chat.avatar_data_url,
+      avatar_gradient: chat.avatar_gradient,
+      last_message_preview: chat.last_message_preview,
+      created_at: chat.created_at || new Date().toISOString(),
+    } as ChatItem
+    const isPublicPreviewOnly =
+      (normalizedChat.kind || '').trim() === 'public_channel' &&
+      !String(normalizedChat.viewer_role || '').trim() &&
+      !chats.value.some((item) => item.id === chatID)
+
+    if (isPublicPreviewOnly) {
+      invitePreviewChat.value = normalizedChat
+    } else if (!chats.value.some((item) => item.id === chatID)) {
+      chats.value = [normalizedChat, ...chats.value]
+      writeJSON(CHATS_CACHE_KEY, chats.value)
+    }
+    if ((normalizedChat.kind || '').trim() === 'public_channel') {
+      try {
+        invitePreviewChat.value = await getChat(chatID)
+      } catch {
+        // keep preview fallback
+      }
+    }
+    await selectChat(chatID)
+  }
+
+  async function openDirectChatWithUser(userIDRaw: string) {
+    const userID = (userIDRaw || '').trim()
+    if (!userID) return
+    const existing = chats.value.find((chat) => Boolean(chat.is_direct) && (chat.peer_user_id || '').trim() === userID)
+    if (existing?.id) {
+      await selectChat(existing.id)
+      return
+    }
+    const payload = await directChatClient.openDirectChat({ recipient_user_id: userID })
+    if (!chats.value.some((item) => item.id === payload.chat.id)) {
+      chats.value = [payload.chat, ...chats.value]
+      writeJSON(CHATS_CACHE_KEY, chats.value)
+    }
+    await loadChats()
+    await selectChat(payload.chat.id)
+  }
+
+  async function openDirectChatByUsername(usernameRaw: string) {
+    const username = (usernameRaw || '').trim().replace(/^@+/, '').toLowerCase()
+    if (!username) return
+    const fromMembers = chatMembers.value.find((item) => ((item.profile?.username || '').trim().toLowerCase() === username))
+    if (fromMembers?.user_id) {
+      await openDirectChatWithUser(fromMembers.user_id)
+      return
+    }
+    const peerID = (peerProfile.value?.id || '').trim()
+    const peerUsername = (peerProfile.value?.username || '').trim().toLowerCase()
+    if (peerID && peerUsername === username) {
+      await openDirectChatWithUser(peerID)
+      return
+    }
+    const results = await searchDirectory({ q: username, scope: 'users', limit: 20 } as never)
+    const exact = (results.users || []).find((item) => (item.username || '').trim().toLowerCase() === username)
+    if (!exact?.id) return
+    await openDirectChatWithUser(exact.id)
   }
 
   function selectGroupChannel(channelChatID: string) {
@@ -833,11 +975,15 @@ export function useChatWorkspace() {
     const chatID = activeMessagesChatID.value
     const text = draft.trim()
     if (!chatID) return false
-    if (!text && pendingFiles.value.length === 0) return false
 
     sending.value = true
     errorText.value = ''
     try {
+      const existingAttachmentIDs = editingMessage.value
+        ? parseMessageContent(editingMessage.value.raw.content || '').attachments.map((item) => item.id).filter(Boolean)
+        : []
+      if (!text && pendingFiles.value.length === 0 && existingAttachmentIDs.length === 0) return false
+
       const uploaded = await Promise.all(
         pendingFiles.value.map(async (pending) => {
           const up = await mediaPipelineClient.uploadFile({
@@ -858,9 +1004,37 @@ export function useChatWorkspace() {
         }),
       )
 
-      const content = [text, uploaded.map((item) => item.token).join(' ')].filter(Boolean).join('\n')
+      const attachmentTokens = uploaded.length > 0
+        ? uploaded.map((item) => item.token)
+        : editingMessage.value
+          ? parseMessageContent(editingMessage.value.raw.content || '').attachments.map((item) =>
+              encodeAttachmentToken({
+                id: item.id,
+                filename: item.filename,
+                mimeType: item.mimeType,
+                kind: item.kind,
+              }),
+            )
+          : []
+      const attachmentIDs = uploaded.length > 0 ? uploaded.map((item) => item.id) : existingAttachmentIDs
+      const content = [text, attachmentTokens.join(' ')].filter(Boolean).join('\n')
       const replyToMessageID = (replyToMessage.value?.raw.id || '').trim()
-      const created = await sendMessage(chatID, content, uploaded.map((item) => item.id), replyToMessageID)
+      if (editingMessage.value) {
+        const updated = await editMessage(chatID, editingMessage.value.raw.id, content, attachmentIDs)
+        rawMessages.value = rawMessages.value.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+        await hydrateAttachmentURLs([updated], urlsByAttachment, attachmentRequests, parseMessageContent, getAttachment)
+        writeJSON(`${MSG_CACHE_PREFIX}${chatID}`, rawMessages.value)
+        updateGroupChannelPreview(chatID, updated.content || content, updated.created_at)
+        pendingFiles.value = []
+        replyToMessage.value = null
+        editingMessage.value = null
+        void loadChats()
+        const groupID = findGroupIDByChannelID(chatID)
+        if (groupID) void loadGroupChannels(groupID)
+        return true
+      }
+
+      const created = await sendMessage(chatID, content, attachmentIDs, replyToMessageID)
       rawMessages.value = [...rawMessages.value, created]
       await hydrateAttachmentURLs([created], urlsByAttachment, attachmentRequests, parseMessageContent, getAttachment)
       writeJSON(`${MSG_CACHE_PREFIX}${chatID}`, rawMessages.value)
@@ -971,12 +1145,30 @@ export function useChatWorkspace() {
 
   function replyFromContextMenu() {
     if (!contextMenu.value) return
+    editingMessage.value = null
     replyToMessage.value = contextMenu.value.message
     contextMenu.value = null
   }
 
+  function beginReplyToMessage(message: ViewMessage | null) {
+    editingMessage.value = null
+    replyToMessage.value = message
+  }
+
   function clearReplyToMessage() {
     replyToMessage.value = null
+  }
+
+  function editFromContextMenu(message: ViewMessage | null = contextMenu.value?.message || null) {
+    if (!message) {
+      editingMessage.value = null
+      pendingFiles.value = []
+      return
+    }
+    replyToMessage.value = null
+    editingMessage.value = message
+    pendingFiles.value = []
+    contextMenu.value = null
   }
 
   async function deleteContextMessage() {
@@ -1015,11 +1207,21 @@ export function useChatWorkspace() {
     focusedInfoUserProfile.value = null
     infoOpen.value = true
     chatMenuAnchor.value = null
+    if ((selectedChat.value?.kind || '').trim() === 'public_channel') {
+      void refreshSelectedPublicChannel(selectedChat.value?.id || '')
+      void refreshRemovedChatMembers(selectedChat.value?.id || '')
+      void refreshSelectedChatInviteLinks(selectedChat.value?.id || '')
+    } else {
+      removedChatMembers.value = []
+      selectedChatInviteLinks.value = []
+    }
   }
 
   function closeInfo() {
     infoOpen.value = false
     focusedInfoUserProfile.value = null
+    removedChatMembers.value = []
+    selectedChatInviteLinks.value = []
   }
 
   async function openInfoForUser(userIDRaw: string) {
@@ -1154,7 +1356,96 @@ export function useChatWorkspace() {
     }
   }
 
-  async function updateSelectedGroupProfile(input: { title: string; avatarDataUrl?: string | null }) {
+  async function createPublicChannelChat(title: string, publicSlug: string, isPublic = true) {
+    const cleanTitle = (title || '').trim()
+    const cleanSlug = (publicSlug || '').trim()
+    if (!cleanTitle || (isPublic && !cleanSlug)) return
+    try {
+      const payload = await createPublicChannel(isPublic
+        ? { title: cleanTitle, public_slug: cleanSlug, is_public: true }
+        : { title: cleanTitle, is_public: false })
+      await loadChats()
+      if (payload.chat?.id) {
+        await selectChat(payload.chat.id)
+      }
+    } catch (error) {
+      errorText.value = error instanceof Error ? error.message : t('chat.create_channel_error')
+      throw error
+    }
+  }
+
+  function patchChatLocally(chatID: string, patch: Partial<ChatItem>) {
+    chats.value = chats.value.map((item) => (item.id === chatID ? { ...item, ...patch } : item))
+    if (invitePreviewChat.value?.id === chatID) {
+      invitePreviewChat.value = { ...invitePreviewChat.value, ...patch }
+    }
+    writeJSON(CHATS_CACHE_KEY, chats.value)
+  }
+
+  async function subscribeSelectedPublicChannel() {
+    const active = selectedChat.value
+    const chatID = (active?.id || '').trim()
+    if (!chatID || (active?.kind || '').trim() !== 'public_channel') return
+    try {
+      const payload = await subscribePublicChannel(chatID)
+      const currentCount = Number(active?.subscriber_count || 0)
+      patchChatLocally(chatID, {
+        ...payload.chat,
+        viewer_role: payload.chat?.viewer_role || 'subscriber',
+        subscriber_count: payload.chat?.subscriber_count ?? Math.max(1, currentCount + 1),
+      })
+      await refreshChatMembers(chatID)
+      if (infoOpen.value) {
+        await refreshSelectedChatInviteLinks(chatID)
+      }
+      await selectChat(chatID)
+    } catch (error) {
+      errorText.value = error instanceof Error ? error.message : t('chat.join_chat_error')
+      throw error
+    }
+  }
+
+  async function unsubscribeSelectedPublicChannel() {
+    const active = selectedChat.value
+    const chatID = (active?.id || '').trim()
+    if (!chatID || (active?.kind || '').trim() !== 'public_channel') return
+    try {
+      await unsubscribePublicChannel(chatID)
+      const currentCount = Number(active?.subscriber_count || 0)
+      patchChatLocally(chatID, {
+        viewer_role: '',
+        subscriber_count: Math.max(0, currentCount - 1),
+      })
+      chatMembers.value = []
+      removedChatMembers.value = []
+      selectedChatInviteLinks.value = []
+      await selectChat(chatID)
+    } catch (error) {
+      errorText.value = error instanceof Error ? error.message : t('chat.leave_chat_error')
+      throw error
+    }
+  }
+
+  async function createSelectedChatInviteLink(title = '') {
+    const chatID = (selectedChat.value?.id || '').trim()
+    if (!chatID) return null
+    try {
+      const item = await createChatInviteLink(chatID, { title })
+      await refreshSelectedChatInviteLinks(chatID)
+      return item
+    } catch (error) {
+      errorText.value = error instanceof Error ? error.message : t('chat.invite_link_create_error')
+      throw error
+    }
+  }
+
+  async function updateSelectedGroupProfile(input: {
+    title: string
+    avatarDataUrl?: string | null
+    commentsEnabled?: boolean
+    isPublic?: boolean
+    publicSlug?: string | null
+  }) {
     const active = selectedChat.value
     const chatID = (active?.id || '').trim()
     if (!chatID || !active || active.is_direct) return
@@ -1169,6 +1460,9 @@ export function useChatWorkspace() {
       const payload = await updateChat(chatID, {
         title: cleanTitle,
         avatar_data_url: typeof input.avatarDataUrl === 'string' ? input.avatarDataUrl : undefined,
+        comments_enabled: typeof input.commentsEnabled === 'boolean' ? input.commentsEnabled : undefined,
+        is_public: typeof input.isPublic === 'boolean' ? input.isPublic : undefined,
+        public_slug: typeof input.publicSlug === 'string' ? input.publicSlug : input.publicSlug === null ? null : undefined,
       })
       const updatedChat = payload.chat
       chats.value = chats.value.map((item) => (item.id === updatedChat.id ? { ...item, ...updatedChat } : item))
@@ -1216,7 +1510,7 @@ export function useChatWorkspace() {
     }
   }
 
-  async function updateSelectedGroupMemberRole(userID: string, role: 'member' | 'moderator' | 'admin') {
+  async function updateSelectedGroupMemberRole(userID: string, role: 'member' | 'moderator' | 'admin' | 'subscriber' | 'banned') {
     const chatID = (selectedChat.value?.id || '').trim()
     if (!chatID) return
     try {
@@ -1256,6 +1550,54 @@ export function useChatWorkspace() {
       }
     } catch (error) {
       errorText.value = error instanceof Error ? error.message : t('chat.accept_invite_error')
+      clearHash()
+    }
+  }
+
+  async function acceptInviteLinkFromHashIfNeeded() {
+    const token = readInviteLinkTokenFromHash()
+    if (!token) return
+    try {
+      const payload = await acceptChannelInviteLink(token)
+      await loadChats()
+      if (payload.chat?.id) {
+        invitePreviewChat.value = payload.chat
+        selectedChatID.value = payload.chat.id
+        setHashToChatId(payload.chat.id)
+        await loadMessages(payload.chat.id)
+      } else {
+        clearHash()
+      }
+    } catch (error) {
+      errorText.value = error instanceof Error ? error.message : t('chat.accept_invite_error')
+      clearHash()
+    }
+  }
+
+  async function openPublicChannelFromHashIfNeeded() {
+    const slug = readPublicSlugFromHash()
+    if (!slug) return
+    try {
+      const results = await searchDirectory({ q: `@${slug}`, scope: 'all', limit: 20 } as never)
+      const found = (results.chats || []).find((chat) => ((chat.public_slug || '').trim().replace(/^@+/, '').toLowerCase() === slug.toLowerCase()))
+      if (!found?.id) {
+        clearHash()
+        return
+      }
+      invitePreviewChat.value = {
+        id: found.id,
+        title: found.title,
+        is_direct: false,
+        type: 'standard',
+        kind: found.kind || 'public_channel',
+        is_public: true,
+        public_slug: found.public_slug,
+        created_at: new Date().toISOString(),
+      }
+      await selectDirectoryChat(found as Partial<ChatItem> & { id: string; title: string; kind?: string })
+      setHashToChatId(found.id)
+    } catch (error) {
+      errorText.value = error instanceof Error ? error.message : t('chat.search_failed')
       clearHash()
     }
   }
@@ -1313,6 +1655,14 @@ export function useChatWorkspace() {
       void acceptInviteFromHashIfNeeded()
       return
     }
+    if (readInviteLinkTokenFromHash()) {
+      void acceptInviteLinkFromHashIfNeeded()
+      return
+    }
+    if (readPublicSlugFromHash()) {
+      void openPublicChannelFromHashIfNeeded()
+      return
+    }
     const selection = readChatSelectionFromHash(PENDING_CHAT_PREFIX)
     const fromHash = selection.chatID
     if (!fromHash) {
@@ -1350,6 +1700,7 @@ export function useChatWorkspace() {
     await loadNotifications()
     await loadChats()
     await acceptInviteFromHashIfNeeded()
+    await acceptInviteLinkFromHashIfNeeded()
     writeJSON(GROUP_CHANNELS_CACHE_KEY, groupChannelsByGroupID.value)
     if (selectedChatID.value && rawMessages.value.length === 0) {
       void loadMessages(activeMessagesChatID.value || selectedChatID.value)
@@ -1392,6 +1743,7 @@ export function useChatWorkspace() {
     contextMenu,
     contextReactionAnchor,
     replyToMessage,
+    editingMessage,
     pendingFiles,
     uploadProgress,
     directoryQuery,
@@ -1408,6 +1760,8 @@ export function useChatWorkspace() {
     peerProfile,
     focusedInfoUserProfile,
     chatMembers,
+    removedChatMembers,
+    selectedChatInviteLinks,
     directPeerId,
     infoDisplayTitle,
     infoSubtitle,
@@ -1420,6 +1774,9 @@ export function useChatWorkspace() {
     wsConnected,
     setChatFilter,
     selectChat,
+    selectDirectoryChat,
+    openDirectChatWithUser,
+    openDirectChatByUsername,
     setPendingFiles,
     removePendingFile,
     sendDraft,
@@ -1432,6 +1789,8 @@ export function useChatWorkspace() {
     selectReactionFromPicker,
     copyContextMessage,
     replyFromContextMenu,
+    beginReplyToMessage,
+    editFromContextMenu,
     clearReplyToMessage,
     deleteContextMessage,
     openPhotoViewer,
@@ -1451,6 +1810,7 @@ export function useChatWorkspace() {
     selectGroupChannel,
     createGroupChat,
     createChannelForSelectedGroup,
+    createPublicChannelChat,
     updateSelectedGroupProfile,
     leaveSelectedChat,
     canCreateChannel: computed(() => {
@@ -1464,6 +1824,9 @@ export function useChatWorkspace() {
     updateSelectedGroupMemberRole,
     removeSelectedGroupMember,
     toggleMuteSelectedChat,
+    subscribeSelectedPublicChannel,
+    unsubscribeSelectedPublicChannel,
+    createSelectedChatInviteLink,
     sendRequest,
   }
 }

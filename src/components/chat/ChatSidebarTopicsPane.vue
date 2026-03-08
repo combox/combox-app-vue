@@ -2,6 +2,7 @@
 import { type ChatItem } from 'combox-api'
 import { computed } from 'vue'
 import type { GroupChannelItem } from './chatSidebar.types'
+import { summarizeMessagePreview } from './chatUtils'
 import { useI18n } from '../../i18n/i18n'
 
 const props = defineProps<{
@@ -45,7 +46,14 @@ function formatTopicMeta(value?: string): string {
 }
 
 function formatTopicPreview(raw: string): string {
-  return (raw || '').trim() || t('chat.no_messages')
+  return summarizeMessagePreview(raw || '', {
+    gif: t('chat.gif'),
+    video: t('chat.video'),
+    photo: t('chat.photo'),
+    audio: t('chat.audio'),
+    file: t('chat.file'),
+    empty: t('chat.no_messages'),
+  })
 }
 
 const visibleChannels = computed(() => {

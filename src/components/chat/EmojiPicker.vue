@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { addRecentGif, listRecentGifs, searchGifs, type GIFItem } from 'combox-api'
 import { computed, ref, watch } from 'vue'
+import { useI18n } from '../../i18n/i18n'
 
 type PickerTab = 'emoji' | 'gif' | 'stickers'
 
@@ -9,6 +10,7 @@ const emit = defineEmits<{
   select: [emoji: string]
   selectGif: [item: GIFItem]
 }>()
+const { t } = useI18n()
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 const tab = ref<PickerTab>('emoji')
@@ -46,7 +48,7 @@ const filteredSections = computed(() => {
   const q = emojiQuery.value.trim().toLowerCase()
   if (!q) return EMOJI_SECTIONS
   const allEmojis = EMOJI_SECTIONS.flatMap((s) => s.emojis).filter((e) => e.includes(q))
-  return allEmojis.length ? [{ label: 'Search results', emojis: allEmojis }] : []
+  return allEmojis.length ? [{ label: t('chat.emoji_search_results'), emojis: allEmojis }] : []
 })
 
 // ── GIF state ─────────────────────────────────────────────────────────────────
@@ -161,7 +163,7 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
       <template v-if="tab === 'emoji'">
         <div class="ep-search-wrap">
           <svg class="ep-search-icon" viewBox="0 0 20 20" fill="none"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M13 13l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <input v-model="emojiQuery" class="ep-search" placeholder="Search emoji…" />
+          <input v-model="emojiQuery" class="ep-search" :placeholder="t('chat.emoji_search')" />
         </div>
         <div class="ep-scroll">
           <template v-for="section in filteredSections" :key="section.label">
@@ -177,7 +179,7 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
               >{{ emoji }}</button>
             </div>
           </template>
-          <div v-if="filteredSections.length === 0" class="ep-empty">No emoji found</div>
+          <div v-if="filteredSections.length === 0" class="ep-empty">{{ t('chat.emoji_not_found') }}</div>
         </div>
       </template>
 
@@ -185,11 +187,11 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
       <template v-else-if="tab === 'gif'">
         <div class="ep-search-wrap">
           <svg class="ep-search-icon" viewBox="0 0 20 20" fill="none"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M13 13l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <input v-model="gifQuery" class="ep-search" placeholder="Search GIFs…" />
+          <input v-model="gifQuery" class="ep-search" :placeholder="t('chat.gif_search')" />
         </div>
 
         <div class="ep-scroll">
-          <div v-if="gifApiUnavailable" class="ep-empty">GIF service temporarily unavailable</div>
+          <div v-if="gifApiUnavailable" class="ep-empty">{{ t('chat.gif_unavailable') }}</div>
 
           <!-- Loading skeleton -->
           <div v-else-if="gifLoading" class="ep-gif-grid">
@@ -199,7 +201,7 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
           <!-- Empty state: recent + popular -->
           <template v-else-if="!gifQueryDebounced">
             <template v-if="gifRecent.length">
-              <div class="ep-section-label">Recent</div>
+              <div class="ep-section-label">{{ t('chat.emoji_recent') }}</div>
               <div class="ep-gif-grid">
                 <button
                   v-for="item in gifRecent"
@@ -222,7 +224,7 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
             </template>
 
             <template v-if="gifPopular.length">
-              <div class="ep-section-label">Popular</div>
+              <div class="ep-section-label">{{ t('chat.gif_popular') }}</div>
               <div class="ep-gif-grid">
                 <button
                   v-for="item in gifPopular"
@@ -243,7 +245,7 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
                 </button>
               </div>
               <button v-if="gifPopularNextPos" type="button" class="ep-load-more" :disabled="gifPopularLoadingMore" @click="loadMorePopular">
-                {{ gifPopularLoadingMore ? 'Loading…' : 'Load more' }}
+                {{ gifPopularLoadingMore ? t('common.loading') : t('common.load_more') }}
               </button>
             </template>
           </template>
@@ -269,9 +271,9 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
                 />
               </button>
             </div>
-            <div v-if="!gifSearchItems.length" class="ep-empty">No GIFs found</div>
+            <div v-if="!gifSearchItems.length" class="ep-empty">{{ t('chat.gif_not_found') }}</div>
             <button v-if="gifSearchNextPos" type="button" class="ep-load-more" :disabled="gifLoadingMore" @click="loadMoreGifs">
-              {{ gifLoadingMore ? 'Loading…' : 'Load more' }}
+              {{ gifLoadingMore ? t('common.loading') : t('common.load_more') }}
             </button>
           </template>
         </div>
@@ -281,20 +283,20 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
       <template v-else-if="tab === 'stickers'">
         <div class="ep-scroll ep-stickers-placeholder">
           <div class="ep-sticker-icon">🗂️</div>
-          <div class="ep-sticker-text">Stickers coming soon</div>
+          <div class="ep-sticker-text">{{ t('chat.stickers_coming_soon') }}</div>
         </div>
       </template>
     </div>
 
     <!-- ── Tab bar ── -->
     <div class="ep-tabs">
-      <button type="button" class="ep-tab" :class="{ active: tab === 'emoji' }" title="Emoji" @click="tab = 'emoji'">
+      <button type="button" class="ep-tab" :class="{ active: tab === 'emoji' }" :title="t('chat.emoji')" @click="tab = 'emoji'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2" stroke-linecap="round"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/></svg>
       </button>
-      <button type="button" class="ep-tab" :class="{ active: tab === 'stickers' }" title="Stickers" @click="tab = 'stickers'">
+      <button type="button" class="ep-tab" :class="{ active: tab === 'stickers' }" :title="t('chat.stickers')" @click="tab = 'stickers'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M3 9h18M9 3v18" stroke-linecap="round"/></svg>
       </button>
-      <button type="button" class="ep-tab" :class="{ active: tab === 'gif' }" title="GIFs" @click="tab = 'gif'">
+      <button type="button" class="ep-tab" :class="{ active: tab === 'gif' }" :title="t('chat.gifs')" @click="tab = 'gif'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="20" height="12" rx="3"/><path d="M8 12h-2v-2m0 2v2m5-4v4m4-4h-2v4h2m0-2h-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </div>

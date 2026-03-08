@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { searchDirectory, type AuthUser, type ChatItem, type ChatMemberProfile, type SearchUserResult } from 'combox-api'
 import { normalizeAvatarSrc } from './chatUtils'
+import { useI18n } from '../../i18n/i18n'
 
 const props = defineProps<{
   selectedChat: ChatItem | null
@@ -26,6 +27,7 @@ const avatarPreview = ref(normalizeAvatarSrc(props.selectedChat?.avatar_data_url
 const avatarDataUrl = ref<string | null>(null)
 const saveBusy = ref(false)
 const saveError = ref('')
+const { t } = useI18n()
 
 const currentRole = computed(() => {
   const currentUserID = (props.currentUser?.id || '').trim()
@@ -121,7 +123,7 @@ function pickAvatar() {
       saveError.value = ''
     }
     reader.onerror = () => {
-      saveError.value = 'Unable to read avatar file'
+      saveError.value = t('chat.failed_read_avatar')
     }
     reader.readAsDataURL(file)
   }
@@ -132,7 +134,7 @@ function saveProfile() {
   if (saveBusy.value) return
   const cleanTitle = title.value.trim()
   if (!cleanTitle) {
-    saveError.value = 'Group title is required'
+    saveError.value = t('chat.group_title_required')
     return
   }
   saveBusy.value = true
@@ -166,10 +168,10 @@ function leaveCurrentChat() {
 <template>
   <div class="gpRoot">
     <div class="gpHeader">
-      <button type="button" class="gpIconBtn" aria-label="Back" @click="emit('close')">
+      <button type="button" class="gpIconBtn" :aria-label="t('chat.back')" @click="emit('close')">
         <v-icon icon="mdi-arrow-left" size="20" />
       </button>
-      <div class="gpTitle">Edit</div>
+      <div class="gpTitle">{{ t('settings.edit_profile') }}</div>
     </div>
 
     <div class="gpHero">
@@ -177,16 +179,16 @@ function leaveCurrentChat() {
         <img v-if="avatarPreview" :src="avatarPreview" alt="" class="gpAvatar" />
         <div v-else class="gpAvatarFallback">{{ (selectedChat?.title || 'G').slice(0, 1).toUpperCase() }}</div>
       </div>
-      <button type="button" class="gpAvatarBtn" @click="pickAvatar">Change photo</button>
+      <button type="button" class="gpAvatarBtn" @click="pickAvatar">{{ t('settings.avatar_upload') }}</button>
     </div>
 
     <div class="gpSection">
-      <div class="gpFieldLabel">Group name</div>
-      <input v-model="title" class="gpInput" placeholder="Group name" />
+      <div class="gpFieldLabel">{{ t('chat.group_title') }}</div>
+      <input v-model="title" class="gpInput" :placeholder="t('chat.group_title')" />
       <div v-if="saveError" class="gpError">{{ saveError }}</div>
       <div class="gpSaveRow">
         <button type="button" class="gpSaveBtn" :disabled="saveBusy || !hasUnsavedChanges" @click="saveProfile">
-          {{ saveBusy ? 'Saving...' : 'Save' }}
+          {{ saveBusy ? t('chat.saving') : t('chat.save') }}
         </button>
       </div>
     </div>
@@ -194,22 +196,22 @@ function leaveCurrentChat() {
     <div class="gpSection">
       <div class="gpStatRow">
         <div>
-          <div class="gpStatTitle">Administrators</div>
+          <div class="gpStatTitle">{{ t('chat.administrators') }}</div>
           <div class="gpStatValue">{{ adminCount }}</div>
         </div>
       </div>
       <div class="gpStatRow">
         <div>
-          <div class="gpStatTitle">Members</div>
+          <div class="gpStatTitle">{{ t('chat.members') }}</div>
           <div class="gpStatValue">{{ normalizedMembers.length }}</div>
         </div>
       </div>
     </div>
 
     <div class="gpSection">
-      <div class="gpFieldLabel">Add participants</div>
-      <input v-model="addQuery" class="gpInput" placeholder="Search users" />
-      <div v-if="addBusy" class="gpHint">Searching...</div>
+      <div class="gpFieldLabel">{{ t('chat.add_participants') }}</div>
+      <input v-model="addQuery" class="gpInput" :placeholder="t('chat.search')" />
+      <div v-if="addBusy" class="gpHint">{{ t('chat.searching') }}</div>
       <div v-else-if="visibleAddResults.length > 0" class="gpSearchList">
         <button v-for="user in visibleAddResults" :key="user.id" type="button" class="gpSearchItem" @click="addMember(user)">
           <div class="gpMiniAvatar">
@@ -225,7 +227,7 @@ function leaveCurrentChat() {
     </div>
 
     <div class="gpSection">
-      <div class="gpSectionTitle">Members</div>
+      <div class="gpSectionTitle">{{ t('chat.members') }}</div>
       <div class="gpMemberList">
         <div v-for="member in normalizedMembers" :key="member.id" class="gpMemberItem">
           <div class="gpMiniAvatar">
@@ -241,18 +243,18 @@ function leaveCurrentChat() {
           </div>
           <div v-if="!member.isCurrentUser && member.role !== 'owner'" class="gpActions">
             <template v-if="canManageRoles">
-              <button type="button" class="gpActionBtn" @click="setRole(member.id, 'member')">Member</button>
-              <button type="button" class="gpActionBtn" @click="setRole(member.id, 'moderator')">Mod</button>
-              <button type="button" class="gpActionBtn" @click="setRole(member.id, 'admin')">Admin</button>
+              <button type="button" class="gpActionBtn" @click="setRole(member.id, 'member')">{{ t('chat.member') }}</button>
+              <button type="button" class="gpActionBtn" @click="setRole(member.id, 'moderator')">{{ t('chat.moderator_short') }}</button>
+              <button type="button" class="gpActionBtn" @click="setRole(member.id, 'admin')">{{ t('chat.admin') }}</button>
             </template>
-            <button type="button" class="gpDangerBtn" @click="removeMember(member.id)">Remove</button>
+            <button type="button" class="gpDangerBtn" @click="removeMember(member.id)">{{ t('chat.delete') }}</button>
           </div>
         </div>
       </div>
     </div>
 
     <div class="gpSection gpDangerSection">
-      <button type="button" class="gpLeaveBtn" @click="leaveCurrentChat">Leave chat</button>
+      <button type="button" class="gpLeaveBtn" @click="leaveCurrentChat">{{ t('chat.leave_chat') }}</button>
     </div>
   </div>
 </template>

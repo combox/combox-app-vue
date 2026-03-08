@@ -3,6 +3,7 @@ import * as PlyrImport from 'plyr'
 import 'plyr/dist/plyr.css'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { getAttachment, getAttachmentDownloadURL } from 'combox-api'
+import { useI18n } from '../../i18n/i18n'
 
 const Plyr = ((PlyrImport as unknown as { default?: unknown }).default ?? PlyrImport) as unknown as new (
   target: HTMLElement,
@@ -25,6 +26,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
 }>()
+const { t } = useI18n()
 
 const viewerRef = ref<HTMLDivElement | null>(null)
 const mediaHostRef = ref<HTMLDivElement | null>(null)
@@ -152,7 +154,7 @@ async function setupPlayer() {
   }
 
   player.on('error', () => {
-    mediaError.value = 'Video codec is not supported in this browser.'
+    mediaError.value = t('chat.video_codec_unsupported', undefined, 'Video codec is not supported in this browser.')
   })
 
   window.setTimeout(() => {
@@ -160,7 +162,7 @@ async function setupPlayer() {
       if (error instanceof DOMException && error.name === 'AbortError') return
       if (error instanceof DOMException && error.name === 'NotAllowedError') return
       if (isYouTubeSource.value) return
-      mediaError.value = 'Unable to start video playback.'
+      mediaError.value = t('chat.video_playback_failed', undefined, 'Unable to start video playback.')
     })
   }, 40)
 }
@@ -218,7 +220,7 @@ async function onDownloadClick(event: Event) {
       trigger(downloadSrc)
     }
   } catch {
-    mediaError.value = 'Unable to download video file.'
+    mediaError.value = t('chat.video_download_failed', undefined, 'Unable to download video file.')
   }
 }
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useI18n } from '../../i18n/i18n'
 const props = defineProps<{
   title: string
   subtitle: string
@@ -6,6 +7,8 @@ const props = defineProps<{
   avatarSrc?: string
   searchOpen: boolean
   searchValue: string
+  showBack?: boolean
+  backAriaLabel?: string
 }>()
 
 const emit = defineEmits<{
@@ -14,7 +17,9 @@ const emit = defineEmits<{
   closeSearch: []
   updateSearch: [value: string]
   openMenu: [anchor: { top: number; left: number; width: number; height: number }]
+  back: []
 }>()
+const { t } = useI18n()
 
 function openMenu(event: MouseEvent) {
   const target = event.currentTarget as HTMLElement | null
@@ -34,16 +39,19 @@ function openMenu(event: MouseEvent) {
             class="convSearchInput"
             :value="searchValue"
             autofocus
-            placeholder="Search"
+            :placeholder="t('chat.search')"
             @input="emit('updateSearch', ($event.target as HTMLInputElement).value)"
           />
-          <button type="button" class="convActionBtn" aria-label="Close search" @click="emit('closeSearch')">
+          <button type="button" class="convActionBtn" :aria-label="t('chat.close_search')" @click="emit('closeSearch')">
             <v-icon icon="mdi-close" size="18" />
           </button>
         </div>
       </template>
 
       <template v-else>
+        <button v-if="showBack" type="button" class="convActionBtn convBackBtn" :aria-label="backAriaLabel || t('chat.back')" @click="emit('back')">
+          <v-icon icon="mdi-arrow-left" size="18" />
+        </button>
         <div
           class="convPeer"
           role="button"
@@ -64,10 +72,10 @@ function openMenu(event: MouseEvent) {
       </template>
 
       <div class="convActions">
-        <button type="button" class="convActionBtn" aria-label="Search" @click="emit('openSearch')">
+        <button type="button" class="convActionBtn" :aria-label="t('chat.search')" @click="emit('openSearch')">
           <v-icon icon="mdi-magnify" size="18" />
         </button>
-        <button type="button" class="convActionBtn" aria-label="Menu" @click="openMenu">
+        <button type="button" class="convActionBtn" :aria-label="t('chat.menu')" @click="openMenu">
           <v-icon icon="mdi-dots-vertical" size="18" />
         </button>
       </div>
@@ -101,6 +109,10 @@ function openMenu(event: MouseEvent) {
   gap: 12px;
   min-width: 0;
   cursor: pointer;
+}
+
+.convBackBtn {
+  margin-right: 2px;
 }
 
 .convMeta {

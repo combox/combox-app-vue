@@ -19,6 +19,7 @@ const emit = defineEmits<{
   pickFiles: [files: FileList]
   removePendingFile: [id: string]
   clearReply: []
+  clearEdit: []
 }>()
 
 const props = defineProps<{
@@ -27,6 +28,8 @@ const props = defineProps<{
   disabled: boolean
   pendingFiles: PendingFile[]
   replyToMessage: ViewMessage | null
+  editingMessage: ViewMessage | null
+  suppressReplyPreview?: boolean
 }>()
 
 const { t } = useI18n()
@@ -64,6 +67,20 @@ watch(
     pickerOpen.value = false
     nextTick(resizeTextarea)
   },
+)
+
+watch(
+  () => props.editingMessage?.raw.id || '',
+  () => {
+    const editing = props.editingMessage
+    if (editing) {
+      draft.value = editing.text || ''
+    } else if (!props.replyToMessage) {
+      draft.value = ''
+    }
+    nextTick(resizeTextarea)
+  },
+  { immediate: true },
 )
 
 function handleSend() {
@@ -122,10 +139,20 @@ onBeforeUnmount(() => {
       />
     </div>
 
-    <div v-if="replyToMessage" class="replyBar">
+    <div v-if="editingMessage" class="replyBar editBar">
       <div class="replyMain">
-        <div class="replyAuthor">{{ replyToMessage.raw.user_id === '' ? 'Reply' : 'Reply' }}</div>
-        <div class="replyPreview">{{ replyToMessage.text || 'Message' }}</div>
+        <div class="replyAuthor">{{ t('chat.edit_message', undefined, 'Edit message') }}</div>
+        <div class="replyPreview">{{ t('chat.edit_message_hint', undefined, 'Save changes or cancel editing') }}</div>
+      </div>
+      <button type="button" class="replyClose" @click="emit('clearEdit')">
+        <v-icon icon="mdi-close" size="16" />
+      </button>
+    </div>
+
+    <div v-else-if="replyToMessage && !suppressReplyPreview" class="replyBar">
+      <div class="replyMain">
+        <div class="replyAuthor">{{ t('chat.reply') }}</div>
+        <div class="replyPreview">{{ replyToMessage.text || t('chat.message') }}</div>
       </div>
       <button type="button" class="replyClose" @click="emit('clearReply')">
         <v-icon icon="mdi-close" size="16" />
@@ -229,6 +256,10 @@ onBeforeUnmount(() => {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+}
+
+.editBar {
+  border-left-color: rgba(246, 173, 85, 0.82);
 }
 
 .replyMain {

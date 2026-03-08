@@ -15,7 +15,7 @@ export function createGroupActions(deps: any) {
       }
       deps.sidebarPanel.value = 'chats'
     } catch (error) {
-      deps.errorText.value = error instanceof Error ? error.message : 'Unable to create group'
+      deps.errorText.value = error instanceof Error ? error.message : deps.t('chat.create_group_error')
       throw error
     }
   }
@@ -24,7 +24,7 @@ export function createGroupActions(deps: any) {
     const active = deps.selectedChat.value
     const groupID = (active?.parent_chat_id || '').trim() || (active && !active.is_direct ? active.id : '')
     if (!groupID) {
-      deps.errorText.value = 'Open a group first to create a channel'
+      deps.errorText.value = deps.t('chat.open_group_first')
       return
     }
     const cleanTitle = (title || '').trim()
@@ -38,7 +38,7 @@ export function createGroupActions(deps: any) {
       }
       deps.sidebarPanel.value = 'chats'
     } catch (error) {
-      deps.errorText.value = error instanceof Error ? error.message : 'Unable to create channel'
+      deps.errorText.value = error instanceof Error ? error.message : deps.t('chat.create_channel_error')
       throw error
     }
   }
@@ -54,7 +54,7 @@ export function createGroupActions(deps: any) {
       deps.mutedChatIDs.value = Object.fromEntries((payload.muted_chat_ids || []).map((id: string) => [id, true]))
     } catch (error) {
       deps.mutedChatIDs.value = { ...deps.mutedChatIDs.value, [chatID]: !nextMuted }
-      deps.errorText.value = error instanceof Error ? error.message : 'Mute failed'
+      deps.errorText.value = error instanceof Error ? error.message : deps.t('chat.mute_failed')
     }
   }
 
@@ -65,8 +65,8 @@ export function createGroupActions(deps: any) {
 
     const cleanTitle = (input.title || '').trim()
     if (!cleanTitle) {
-      deps.errorText.value = 'Group title is required'
-      throw new Error('Group title is required')
+      deps.errorText.value = deps.t('chat.group_title_required')
+      throw new Error(deps.t('chat.group_title_required'))
     }
 
     try {
@@ -80,7 +80,7 @@ export function createGroupActions(deps: any) {
       if (deps.selectedChatID.value === updatedChat.id) deps.selectedChatID.value = updatedChat.id
       await deps.refreshChatMembers(chatID)
     } catch (error) {
-      deps.errorText.value = error instanceof Error ? error.message : 'Unable to update group'
+      deps.errorText.value = error instanceof Error ? error.message : deps.t('chat.update_group_error')
       throw error
     }
   }
@@ -99,7 +99,7 @@ export function createGroupActions(deps: any) {
       deps.chatMembers.value = []
       deps.focusedInfoUserProfile.value = null
     } catch (error) {
-      deps.errorText.value = error instanceof Error ? error.message : 'Unable to leave chat'
+      deps.errorText.value = error instanceof Error ? error.message : deps.t('chat.leave_chat_error')
       throw error
     }
   }
@@ -115,7 +115,7 @@ export function createGroupActions(deps: any) {
       await deps.refreshChatMembers(chatID)
       await deps.loadChats()
     } catch (error) {
-      deps.errorText.value = error instanceof Error ? error.message : 'Unable to add members'
+      deps.errorText.value = error instanceof Error ? error.message : deps.t('chat.add_members_error')
       throw error
     }
   }
@@ -129,7 +129,7 @@ export function createGroupActions(deps: any) {
       await updateChatMemberRole(chatID, cleanUserID, role)
       await deps.refreshChatMembers(chatID)
     } catch (error) {
-      deps.errorText.value = error instanceof Error ? error.message : 'Unable to update role'
+      deps.errorText.value = error instanceof Error ? error.message : deps.t('chat.update_role_error')
       throw error
     }
   }
@@ -144,7 +144,7 @@ export function createGroupActions(deps: any) {
       await deps.refreshChatMembers(chatID)
       await deps.loadChats()
     } catch (error) {
-      deps.errorText.value = error instanceof Error ? error.message : 'Unable to remove member'
+      deps.errorText.value = error instanceof Error ? error.message : deps.t('chat.remove_member_error')
       throw error
     }
   }

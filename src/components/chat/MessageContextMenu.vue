@@ -7,6 +7,8 @@ const props = defineProps<{
   x: number
   y: number
   showDelete?: boolean
+  showEdit?: boolean
+  showReact?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -14,12 +16,13 @@ const emit = defineEmits<{
   copy: []
   react: [emoji: string]
   reply: []
+  edit: []
   delete: []
   openPicker: []
 }>()
 
 const { t } = useI18n()
-const quick = ['👍', '👎', '❤️', '🔥', '😁', '🎉', '🙏', '😡']
+const quick = ['❤', '👍', '👎', '🔥', '🥰', '👏', '😁', '🤔']
 const menuRef = ref<HTMLElement | null>(null)
 const resolvedX = ref(props.x)
 const resolvedY = ref(props.y)
@@ -73,16 +76,17 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <div v-if="open" class="cmOverlay" @click="emit('close')">
       <div ref="menuRef" class="cmMenu" :style="menuStyle" @click.stop>
-        <div class="cmQuickWrap">
+        <div v-if="showReact !== false" class="cmQuickWrap">
           <button v-for="emoji in quick" :key="emoji" type="button" class="cmQuick" @click="emit('react', emoji)">
-            <span class="cmEmoji">{{ emoji }}</span>
+            <span class="cmEmoji emoji">{{ emoji }}</span>
           </button>
           <button type="button" class="cmQuick cmMore" :title="t('chat.add_reaction', undefined, 'Add reaction')" @click="emit('openPicker')">▾</button>
         </div>
 
-        <div class="cmDivider" />
+        <div v-if="showReact !== false" class="cmDivider" />
 
         <button type="button" class="cmItem" @click="emit('reply')">{{ t('chat.reply', undefined, 'Reply') }}</button>
+        <button v-if="showEdit" type="button" class="cmItem" @click="emit('edit')">{{ t('chat.edit', undefined, 'Edit') }}</button>
         <button type="button" class="cmItem" @click="emit('copy')">{{ t('chat.copy', undefined, 'Copy') }}</button>
         <button v-if="showDelete" type="button" class="cmItem danger" @click="emit('delete')">{{ t('chat.delete', undefined, 'Delete') }}</button>
       </div>
@@ -100,9 +104,11 @@ onBeforeUnmount(() => {
 .cmMenu {
   position: fixed;
   min-width: 240px;
+  max-width: min(240px, calc(100vw - 16px));
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.16);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
 }
 
 .cmQuickWrap {

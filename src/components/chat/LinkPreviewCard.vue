@@ -103,9 +103,7 @@ const isCardVisible = ref(false)
 const pageVisible = ref(typeof document === 'undefined' ? true : document.visibilityState === 'visible')
 const windowFocused = ref(typeof document === 'undefined' ? true : document.hasFocus())
 const focusResumeToken = ref(0)
-const youtubeLiveActive = computed(
-  () => Boolean(isYouTube.value && !props.mediaOverlayOpen && pageVisible.value && windowFocused.value && isCardVisible.value),
-)
+const youtubeLiveActive = computed(() => false)
 let cardObserver: IntersectionObserver | null = null
 const hostText = computed(() => {
   try {

@@ -15,7 +15,7 @@ export type HashChatSelection = {
 
 export function readChatSelectionFromHash(pendingPrefix: string): HashChatSelection {
   const raw = readHashValue()
-  if (!raw || raw.startsWith(pendingPrefix) || raw.startsWith('invite:')) {
+  if (!raw || raw.startsWith(pendingPrefix) || raw.startsWith('invite:') || raw.startsWith('link:')) {
     return { chatID: '', channelTopicNumber: null }
   }
 
@@ -39,6 +39,18 @@ export function readInviteTokenFromHash(): string {
   const raw = readHashValue()
   if (!raw.startsWith('invite:')) return ''
   return raw.slice('invite:'.length).trim()
+}
+
+export function readInviteLinkTokenFromHash(): string {
+  const raw = readHashValue()
+  if (!raw.startsWith('link:')) return ''
+  return raw.slice('link:'.length).trim()
+}
+
+export function readPublicSlugFromHash(): string {
+  const raw = readHashValue()
+  if (!raw.startsWith('@')) return ''
+  return raw.slice(1).trim().replace(/^@+/, '')
 }
 
 export function setHashToChatSelection(chatID: string, channelTopicNumber?: number | null): void {

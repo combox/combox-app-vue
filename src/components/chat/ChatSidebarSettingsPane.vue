@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from '../../i18n/i18n'
 
 const props = defineProps<{
   currentUserAvatarSrc: string
@@ -31,16 +32,17 @@ const emit = defineEmits<{
 }>()
 
 const editMode = ref(false)
+const { t } = useI18n()
 
 const initials = computed(() => {
   const first = props.profileDraft.first_name.trim().slice(0, 1).toUpperCase()
   const last = props.profileDraft.last_name.trim().slice(0, 1).toUpperCase()
-  return `${first}${last}`.trim() || (props.currentUsername || props.currentUserDisplayName || 'U').slice(0, 1).toUpperCase()
+  return `${first}${last}`.trim() || (props.currentUsername || props.currentUserDisplayName || t('settings.user_fallback')).slice(0, 1).toUpperCase()
 })
 
 const displayName = computed(() => {
   const draft = `${props.profileDraft.first_name} ${props.profileDraft.last_name}`.trim()
-  return draft || props.currentUserDisplayName || props.currentUsername || 'User'
+  return draft || props.currentUserDisplayName || props.currentUsername || t('settings.user_fallback')
 })
 
 const birthdayText = computed(() => {
@@ -63,12 +65,12 @@ function handleBack() {
 <template>
   <div class="spRoot">
     <header class="spHeader">
-      <button type="button" class="spIconBtn" aria-label="Back" @click="handleBack">
+      <button type="button" class="spIconBtn" :aria-label="t('chat.back')" @click="handleBack">
         <v-icon icon="mdi-arrow-left" size="18" />
       </button>
-      <div class="spTitle">{{ editMode ? 'Edit profile' : 'Settings' }}</div>
+      <div class="spTitle">{{ editMode ? t('settings.edit_profile') : t('settings.title') }}</div>
       <div class="spHeaderActions">
-        <button v-if="!editMode" type="button" class="spIconBtn" aria-label="Edit profile" @click="editMode = true">
+        <button v-if="!editMode" type="button" class="spIconBtn" :aria-label="t('settings.edit_profile')" @click="editMode = true">
           <v-icon icon="mdi-pencil-outline" size="18" />
         </button>
       </div>
@@ -85,15 +87,15 @@ function handleBack() {
           </div>
           <div v-else class="spHeroAvatar spHeroAvatar--fallback">{{ initials }}</div>
           <div class="spHeroName">{{ displayName }}</div>
-          <div class="spHeroStatus">online</div>
+          <div class="spHeroStatus">{{ t('settings.online') }}</div>
         </section>
 
         <section class="spInfoList">
           <article class="spInfoRow">
             <div class="spInfoIcon"><v-icon icon="mdi-at" size="20" /></div>
             <div class="spInfoBody">
-              <div class="spInfoValue">@{{ props.profileDraft.username || props.currentUsername || 'username' }}</div>
-              <div class="spInfoLabel">Username</div>
+              <div class="spInfoValue">@{{ props.profileDraft.username || props.currentUsername || t('settings.username').toLowerCase() }}</div>
+              <div class="spInfoLabel">{{ t('settings.username') }}</div>
             </div>
           </article>
 
@@ -101,15 +103,15 @@ function handleBack() {
             <div class="spInfoIcon"><v-icon icon="mdi-cake-variant-outline" size="20" /></div>
             <div class="spInfoBody">
               <div class="spInfoValue">{{ birthdayText }}</div>
-              <div class="spInfoLabel">Birthday</div>
+              <div class="spInfoLabel">{{ t('settings.birth_date') }}</div>
             </div>
           </article>
 
           <article class="spInfoRow">
             <div class="spInfoIcon"><v-icon icon="mdi-timer-outline" size="20" /></div>
             <div class="spInfoBody">
-              <div class="spInfoValue">{{ props.sessionIdleDays }} days</div>
-              <div class="spInfoLabel">Session duration</div>
+              <div class="spInfoValue">{{ t('settings.session_duration_days', { count: props.sessionIdleDays }, `${props.sessionIdleDays} days`) }}</div>
+              <div class="spInfoLabel">{{ t('settings.session_duration') }}</div>
             </div>
           </article>
         </section>
@@ -129,27 +131,27 @@ function handleBack() {
 
         <section class="spSection">
           <label class="spField">
-            <span class="spFieldLabel">First name</span>
+            <span class="spFieldLabel">{{ t('settings.first_name') }}</span>
             <input v-model="profileDraft.first_name" class="spInput" :disabled="settingsLoading || settingsSaving" />
           </label>
 
           <label class="spField">
-            <span class="spFieldLabel">Last name</span>
+            <span class="spFieldLabel">{{ t('settings.last_name') }}</span>
             <input v-model="profileDraft.last_name" class="spInput" :disabled="settingsLoading || settingsSaving" />
           </label>
 
           <label class="spField">
-            <span class="spFieldLabel">Username</span>
+            <span class="spFieldLabel">{{ t('settings.username') }}</span>
             <input v-model="profileDraft.username" class="spInput" :disabled="settingsLoading || settingsSaving" />
           </label>
 
           <label class="spField">
-            <span class="spFieldLabel">Birth date</span>
+            <span class="spFieldLabel">{{ t('settings.birth_date') }}</span>
             <input v-model="profileDraft.birth_date" type="date" class="spInput" :disabled="settingsLoading || settingsSaving" />
           </label>
 
           <label class="spField">
-            <span class="spFieldLabel">Session duration (days)</span>
+            <span class="spFieldLabel">{{ t('settings.session_duration') }}</span>
             <input
               :value="sessionIdleDays"
               type="number"
@@ -162,30 +164,30 @@ function handleBack() {
           </label>
 
           <button type="button" class="spBtn spBtn--primary" :disabled="settingsLoading || settingsSaving" @click="emit('save-profile')">
-            {{ settingsSaving ? 'Saving...' : 'Save profile' }}
+            {{ settingsSaving ? t('settings.save_profile_busy') : t('settings.save_profile') }}
           </button>
         </section>
 
         <section class="spSection">
-          <div class="spSectionTitle">Password</div>
+          <div class="spSectionTitle">{{ t('settings.password') }}</div>
           <label class="spField">
-            <span class="spFieldLabel">Current password</span>
+            <span class="spFieldLabel">{{ t('settings.current_password') }}</span>
             <input v-model="passwordDraft.current" type="password" class="spInput" :disabled="passwordSaving" />
           </label>
 
           <label class="spField">
-            <span class="spFieldLabel">New password</span>
+            <span class="spFieldLabel">{{ t('settings.new_password') }}</span>
             <input v-model="passwordDraft.next" type="password" class="spInput" :disabled="passwordSaving" />
           </label>
 
           <button type="button" class="spBtn spBtn--primary" :disabled="passwordSaving" @click="emit('save-password')">
-            {{ passwordSaving ? 'Changing...' : 'Change password' }}
+            {{ passwordSaving ? t('settings.changing_password') : t('settings.change_password') }}
           </button>
         </section>
 
         <section class="spSection">
-          <div class="spSectionTitle">Email change</div>
-          <div class="spHint">Confirm the current email first, then verify the new address.</div>
+          <div class="spSectionTitle">{{ t('settings.email_change') }}</div>
+          <div class="spHint">{{ t('settings.email_change_intro') }}</div>
 
           <template v-if="emailStep === 'old'">
             <button
@@ -195,34 +197,34 @@ function handleBack() {
               :disabled="emailBusy"
               @click="emit('start-email-flow')"
             >
-              {{ emailBusy ? 'Sending...' : 'Send code to current email' }}
+              {{ emailBusy ? t('settings.sending') : t('settings.send_code_current') }}
             </button>
             <label class="spField">
-              <span class="spFieldLabel">Code from current email</span>
+              <span class="spFieldLabel">{{ t('settings.code_current') }}</span>
               <input v-model="emailDraft.oldCode" class="spInput" :disabled="emailBusy" />
             </label>
             <button type="button" class="spBtn spBtn--primary" :disabled="emailBusy" @click="emit('verify-old-code')">
-              {{ emailBusy ? 'Checking...' : 'Verify old email code' }}
+              {{ emailBusy ? t('settings.checking') : t('settings.verify_old_email_code') }}
             </button>
           </template>
 
           <template v-else-if="emailStep === 'new'">
             <label class="spField">
-              <span class="spFieldLabel">New email</span>
+              <span class="spFieldLabel">{{ t('settings.new_email') }}</span>
               <input v-model="emailDraft.email" class="spInput" :disabled="emailBusy" />
             </label>
             <button type="button" class="spBtn spBtn--primary" :disabled="emailBusy" @click="emit('send-new-email-code')">
-              {{ emailBusy ? 'Sending...' : 'Send code to new email' }}
+              {{ emailBusy ? t('settings.sending') : t('settings.send_code_new') }}
             </button>
           </template>
 
           <template v-else>
             <label class="spField">
-              <span class="spFieldLabel">Code from new email</span>
+              <span class="spFieldLabel">{{ t('settings.code_new') }}</span>
               <input v-model="emailDraft.newCode" class="spInput" :disabled="emailBusy" />
             </label>
             <button type="button" class="spBtn spBtn--primary" :disabled="emailBusy" @click="emit('confirm-new-email')">
-              {{ emailBusy ? 'Confirming...' : 'Confirm email change' }}
+              {{ emailBusy ? t('settings.confirming') : t('settings.confirm_email_change') }}
             </button>
           </template>
         </section>
