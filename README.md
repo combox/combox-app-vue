@@ -55,7 +55,7 @@ Important:
 
 - actual merge protection and required approvals must be enabled in GitHub branch protection / rulesets
 - this repo expects `combox-api` to be checked out next to it because of `file:../combox-api`
-- CI and security workflows also require a `CI_REPO_ACCESS_TOKEN` secret with read access to `combox/combox-api` when that repo is private
+- CI and security workflows check out the public `combox-api` repo next to this app because the dependency is declared as `file:../combox-api`
 
 ## License
 
