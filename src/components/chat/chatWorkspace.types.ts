@@ -1,6 +1,6 @@
-export type ChatFilter = 'all' | 'direct' | 'group'
+import type { GroupChannelItem, MessageStatus, PendingFile, PresenceItem } from '../../models/chat'
 
-export type PendingFile = { id: string; file: File; progress: number }
+export type ChatFilter = 'all' | 'direct' | 'group'
 
 export type AttachmentView = {
   url: string
@@ -12,17 +12,7 @@ export type AttachmentView = {
 
 export type ChatMenuAnchor = { top: number; left: number; width: number; height: number }
 
-export type MessageStatus = {
-  message_id: string
-  chat_id: string
-  user_id: string
-  status: string
-  updated_at: string
-}
-
 export type WsResponseEnvelope<T> = { payload?: T; error?: string; code?: string }
-
-export type PresenceItem = { user_id: string; online: boolean; last_seen?: string; last_seen_visible: boolean }
 
 export type PeerProfile = {
   id: string
@@ -34,13 +24,4 @@ export type PeerProfile = {
   avatar_data_url?: string
 }
 
-export type GroupChannelItem = {
-  id: string
-  title: string
-  channel_type?: 'text' | 'voice'
-  topicNumber?: number
-  unread?: number
-  isGeneral?: boolean
-  lastPreview?: string
-  createdAt?: string
-}
+export type { GroupChannelItem, MessageStatus, PendingFile, PresenceItem }

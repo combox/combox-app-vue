@@ -2,14 +2,9 @@
 import type { GIFItem } from 'combox-api'
 import { defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from '../../i18n/i18n'
+import type { PendingFile } from '../../models/chat'
 import PendingMediaTile from './PendingMediaTile.vue'
 import type { ViewMessage } from './chatTypes'
-
-type PendingFile = {
-  id: string
-  file: File
-  progress: number
-}
 
 const INPUT_TEXTAREA_MIN_HEIGHT = 26
 const INPUT_TEXTAREA_MAX_HEIGHT = 168
@@ -40,6 +35,7 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const draft = ref('')
 const pickerOpen = ref(false)
 let pickerPrefetchStarted = false
+type IdleCallbackHandle = Window & { requestIdleCallback?: (cb: () => void) => number }
 
 function prefetchPicker() {
   if (pickerPrefetchStarted) return
@@ -120,7 +116,7 @@ onMounted(() => {
   document.addEventListener('pointerdown', onDocPointerDown)
   const preload = () => prefetchPicker()
   if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-    ;(window as Window & { requestIdleCallback?: (cb: IdleRequestCallback) => number }).requestIdleCallback?.(() => preload())
+    ;(window as IdleCallbackHandle).requestIdleCallback?.(() => preload())
   }
 })
 

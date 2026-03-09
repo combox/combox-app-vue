@@ -1,120 +1,61 @@
 # ComBox App Vue
 
-![banner](.github/assets/banner.png)
+[![Code Quality](https://github.com/combox/combox-app-vue/actions/workflows/security.yml/badge.svg)](https://github.com/combox/combox-app-vue/actions/workflows/security.yml)
 
 [English](./README.md) | [Русский](./README.ru.md)
 
-Vue 3 frontend for ComBox. It provides the main messenger UI: auth flow, chat workspace, groups/topics, media viewers, settings in sidebar, emoji/GIF picker, and realtime client integration through `combox-api`.
+Vue 3 frontend for ComBox. This repo contains the messenger UI, auth flow, chat workspace, settings sidebar, media viewers, and realtime integration through the local `combox-api` package.
 
-## Powered by
+## Requirements
 
-[![Vue](https://img.shields.io/badge/Vue-3.5-42B883?style=for-the-badge&logo=vue.js&logoColor=white)](https://vuejs.org)
-[![Vue Router](https://img.shields.io/badge/Vue_Router-4-4FC08D?style=for-the-badge&logo=vue.js&logoColor=white)](https://router.vuejs.org)
-[![Vuetify](https://img.shields.io/badge/Vuetify-4_alpha-1867C0?style=for-the-badge&logo=vuetify&logoColor=white)](https://vuetifyjs.com)
-[![Webpack](https://img.shields.io/badge/Webpack-5-8DD6F9?style=for-the-badge&logo=webpack&logoColor=black)](https://webpack.js.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+- Node.js 22+
+- npm 10+
+- sibling checkout of `../combox-api`
 
-## What it does
-
-- auth flow for register/login/profile bootstrap
-- main chat layout with sidebar, conversation area, info panel, overlays
-- groups, channels/topics, topic sidebar flow
-- message list, reactions, context menus, media previews/viewers
-- sidebar settings/profile UI
-- emoji/GIF picker with recent emoji and GIF search
-- i18n dictionaries
-- integration with `combox-api` for HTTP + realtime flows
-
-## Architecture (high level)
-
-```text
-          Browser
-             |
-             v
-      [ ComBox App Vue ]
-             |
-   +---------+-------------------------+
-   |                                   |
-   v                                   v
- Vue Router                      Chat workspace runtime
- /auth / /settings              sidebar, messages, overlays,
-                                info panel, composer, media
-             |
-             v
-         combox-api
-             |
-             v
-   backend REST + WebSocket endpoints
-```
-
-## Stack notes
-
-- app runtime is Vue 3 SFC
-- bundling/dev server is Webpack
-- some UI pieces use Vuetify primitives, most chat UI is custom
-- package `combox-api` is linked from `../combox-api`
-
-## Scripts
+## Install
 
 ```bash
 npm install
-npm run dev
 ```
 
-Main scripts:
+## Scripts
 
 - `npm run dev` - webpack dev server on `0.0.0.0:4173`
-- `npm run build` - production webpack build + type check
-- `npm run check` - TypeScript project build/check
 - `npm run lint` - ESLint
-- `npm run preview` - serve built `dist/`
+- `npm run check` - TypeScript project check
+- `npm run build` - production build + type check
+- `npm run preview` - serve `dist/`
 
-## Runtime expectations
+## Environment
 
-By default the app talks to backend through `combox-api` defaults:
+The app uses URL inference from `combox-api` by default.
 
-- private API base inferred from browser location
-- WebSocket base inferred from browser location
-
-Override when needed with env:
+Optional overrides:
 
 - `VITE_API_BASE_URL`
 - `VITE_WS_BASE_URL`
 
-## Main UI areas
+## Project Layout
 
-- `src/components/auth/` - auth flow
-- `src/components/chat/` - chat workspace, sidebar, composer, info panel, media, pickers
-- `src/pages/` - top-level routed pages
+- `src/components/auth/` - auth UI
+- `src/components/chat/` - chat workspace, sidebar, composer, media, overlays
+- `src/pages/` - routed pages
 - `src/i18n/` - dictionaries and translation helpers
-- `src/utils/` - small frontend helpers
-
-## Project layout
-
-- `src/main.ts` - app bootstrap
-- `src/router/` - routes
-- `src/pages/` - page containers
-- `src/components/` - UI components
-- `src/i18n/dicts/` - localized strings
-- `public/` - static assets, fonts
+- `public/` - static assets
 - `webpack.config.cjs` - bundler config
-- `Dockerfile` / `docker-compose*.yml` - containerized run modes
 
-## Development notes
+## CI And PR Flow
 
-- most chat behavior is driven from `useChatWorkspace.runtime.ts`
-- UI text should live in dictionaries, not as hardcoded strings
-- avatar fallback and theme tokens should stay visually consistent across sidebar/chat/info/settings
-- project memory/docs for recent work live in `../_memory/`
+- GitHub Actions validates lint, type checks, and production build on pull requests
+- Dependabot opens update PRs for `npm` and `github-actions`
+- `make commit branch=feature/name message="your message"` creates or switches to a non-`main` branch, commits, and pushes it
+- merge to `main` should happen only through PR after green checks and approval
 
-## Edge deployment
+Important:
 
-The repo includes edge-oriented compose files:
-
-- `docker-compose.edge.yml`
-- `docker-compose.edge.dev.yml`
-
-These are meant to run the app behind `combox-edge`, typically without direct public host exposure except through the edge gateway.
+- actual merge protection and required approvals must be enabled in GitHub branch protection / rulesets
+- this repo expects `combox-api` to be checked out next to it because of `file:../combox-api`
+- CI and security workflows check out the public `combox-api` repo next to this app because the dependency is declared as `file:../combox-api`
 
 ## License
 

@@ -1,21 +1,5 @@
 import { ApiError, uploadAttachmentWithProgress, uploadMediaSessionWithProgress } from 'combox-api'
-
-export interface MediaUploadInput {
-  file: File
-  onProgress?: (percent: number) => void
-}
-
-export interface MediaUploadResult {
-  attachment: {
-    id: string
-    filename: string
-    mime_type: string
-    kind: string
-  }
-  url: string
-  previewUrl?: string
-  protocol: 'hls-session' | 'multipart-legacy'
-}
+import type { MediaUploadInput, MediaUploadResult } from './types'
 
 export interface MediaPipelineClient {
   uploadFile(input: MediaUploadInput): Promise<MediaUploadResult>

@@ -25,7 +25,7 @@
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "@vue/compiler-sfc": "^3.5.22",
-    "copy-webpack-plugin": "^13.0.1",
+    "copy-webpack-plugin": "^14.0.0",
     "css-loader": "^7.1.2",
     "esbuild": "^0.27.3",
     "esbuild-loader": "^4.4.2",

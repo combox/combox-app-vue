@@ -23,6 +23,7 @@ const emit = defineEmits<{
     title: string
     avatarDataUrl?: string | null
     commentsEnabled?: boolean
+    reactionsEnabled?: boolean
     isPublic?: boolean
     publicSlug?: string | null
     onSuccess: () => void
@@ -43,6 +44,7 @@ const titleDraft = ref((props.selectedChat?.title || '').trim())
 const avatarPreview = ref(normalizeAvatarSrc(props.selectedChat?.avatar_data_url || ''))
 const avatarDataUrl = ref<string | null>(null)
 const commentsEnabledDraft = ref(Boolean(props.selectedChat?.comments_enabled ?? true))
+const reactionsEnabledDraft = ref(Boolean(props.selectedChat?.reactions_enabled ?? true))
 const isPublicDraft = ref(Boolean(props.selectedChat?.is_public))
 const publicSlugDraft = ref((props.selectedChat?.public_slug || '').trim())
 const saveBusy = ref(false)
@@ -63,15 +65,10 @@ const channelLink = computed(() => {
   if (!slug || typeof window === 'undefined') return ''
   return `${window.location.origin}${window.location.pathname}${window.location.search}#@${encodeURIComponent(slug)}`
 })
-const channelTypeLabel = computed(() => props.selectedChat?.is_public ? t('chat.public_channel', undefined, 'Public channel') : t('chat.private_channel', undefined, 'Private channel'))
-const channelTypeValue = computed(() => props.selectedChat?.is_public ? t('chat.public', undefined, 'Public') : t('chat.private', undefined, 'Private'))
+const channelTypeLabel = computed(() => t('chat.channel', undefined, 'Channel'))
 const commentsEnabled = computed(() => Boolean(props.selectedChat?.comments_enabled ?? true))
+const reactionsEnabled = computed(() => Boolean(props.selectedChat?.reactions_enabled ?? true))
 const primaryInviteLink = computed(() => props.inviteLinks.find((item) => item.is_primary) || props.inviteLinks[0] || null)
-const externalInviteUrl = computed(() => {
-  const token = (primaryInviteLink.value?.token || '').trim()
-  if (!token || typeof window === 'undefined') return ''
-  return `${window.location.origin}${window.location.pathname}${window.location.search}#link:${encodeURIComponent(token)}`
-})
 
 const displayName = computed(() => (props.selectedChat?.title || '').trim() || t('chat.channel_info', undefined, 'Channel'))
 const avatarLetter = computed(() => displayName.value.slice(0, 1).toUpperCase() || 'C')
@@ -119,6 +116,7 @@ watch(
     avatarPreview.value = normalizeAvatarSrc(chat?.avatar_data_url || '')
     avatarDataUrl.value = null
     commentsEnabledDraft.value = Boolean(chat?.comments_enabled ?? true)
+    reactionsEnabledDraft.value = Boolean(chat?.reactions_enabled ?? true)
     isPublicDraft.value = Boolean(chat?.is_public)
     publicSlugDraft.value = (chat?.public_slug || '').trim()
     saveError.value = ''
@@ -177,6 +175,7 @@ function saveProfile() {
     title,
     avatarDataUrl: avatarDataUrl.value,
     commentsEnabled: commentsEnabledDraft.value,
+    reactionsEnabled: reactionsEnabledDraft.value,
     isPublic: isPublicDraft.value,
     publicSlug: isPublicDraft.value ? publicSlugDraft.value.trim() : null,
     onSuccess: () => {
@@ -305,6 +304,14 @@ function setChannelType(nextPublic: boolean) {
             </div>
           </div>
 
+          <div class="pcFactRow pcFactRow--static">
+            <div class="pcFactIcon"><v-icon icon="mdi-emoticon-outline" size="20" /></div>
+            <div class="pcFactBody">
+              <div class="pcFactValue">{{ t('chat.reactions', undefined, 'Reactions') }}</div>
+              <div class="pcFactLabel">{{ reactionsEnabled ? t('chat.reactions_enabled', undefined, 'Enabled') : t('chat.reactions_disabled', undefined, 'Disabled') }}</div>
+            </div>
+          </div>
+
           <button v-if="canViewMembers" type="button" class="pcFactRow" @click="panelMode = 'subscribers'">
             <div class="pcFactIcon"><v-icon icon="mdi-account-group-outline" size="20" /></div>
             <div class="pcFactBody">
@@ -373,6 +380,13 @@ function setChannelType(nextPublic: boolean) {
           <label class="pcField pcToggleField">
             <span class="pcFieldLabel">{{ t('chat.comments', undefined, 'Comments') }}</span>
             <button type="button" class="pcToggle" :class="{ on: commentsEnabledDraft }" @click="commentsEnabledDraft = !commentsEnabledDraft">
+              <span class="pcToggleKnob" />
+            </button>
+          </label>
+
+          <label class="pcField pcToggleField">
+            <span class="pcFieldLabel">{{ t('chat.reactions', undefined, 'Reactions') }}</span>
+            <button type="button" class="pcToggle" :class="{ on: reactionsEnabledDraft }" @click="reactionsEnabledDraft = !reactionsEnabledDraft">
               <span class="pcToggleKnob" />
             </button>
           </label>

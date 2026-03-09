@@ -567,6 +567,8 @@ watch(
 .messageItem {
   content-visibility: auto;
   contain-intrinsic-size: 220px;
+  contain: layout paint style;
+  transform: translateZ(0);
 }
 
 .discussionStack {

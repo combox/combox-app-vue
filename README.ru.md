@@ -1,12 +1,13 @@
 # ComBox App Vue
 
 ![banner](.github/assets/banner.png)
+[![Code Quality](https://github.com/combox/combox-app-vue/actions/workflows/security.yml/badge.svg)](https://github.com/combox/combox-app-vue/actions/workflows/security.yml)
 
 [English](./README.md) | [Русский](./README.ru.md)
 
-Vue 3 frontend для ComBox. Это основной UI мессенджера: auth flow, chat workspace, группы/топики, media viewers, настройки в sidebar, emoji/GIF picker и realtime-интеграция через `combox-api`.
+Фронтенд на Vue 3 для ComBox. Предоставляет основной интерфейс мессенджера: процесс аутентификации, рабочую область чата, группы/темы, просмотрщики медиа, настройки на боковой панели, выбор эмодзи/GIF и интеграцию с клиентом реального времени через `combox-api`.
 
-## Технологии
+## На чём основано
 
 [![Vue](https://img.shields.io/badge/Vue-3.5-42B883?style=for-the-badge&logo=vue.js&logoColor=white)](https://vuejs.org)
 [![Vue Router](https://img.shields.io/badge/Vue_Router-4-4FC08D?style=for-the-badge&logo=vue.js&logoColor=white)](https://router.vuejs.org)
@@ -14,21 +15,21 @@ Vue 3 frontend для ComBox. Это основной UI мессенджера:
 [![Webpack](https://img.shields.io/badge/Webpack-5-8DD6F9?style=for-the-badge&logo=webpack&logoColor=black)](https://webpack.js.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 
-## Что умеет
+## Что делает
 
-- auth flow для register/login/profile bootstrap
-- основной chat layout с sidebar, conversation area, info panel и overlays
-- группы, каналы/топики и topic sidebar flow
-- message list, reactions, context menus, media previews/viewers
-- sidebar settings/profile UI
-- emoji/GIF picker с recent emoji и GIF search
-- i18n dictionaries
-- интеграция с `combox-api` для HTTP + realtime
+- поток аутентификации (регистрация / вход / настройка профиля)
+- основная компоновка чата с боковой панелью, областью беседы, информационной панелью, наложениями
+- группы, каналы/темы, работа с тематической боковой панелью
+- список сообщений, реакции, контекстные меню, предпросмотр и просмотр медиа
+- настройки / интерфейс профиля на боковой панели
+- выбор эмодзи/GIF с недавними эмодзи и поиском GIF
+- словари для локализации (i18n)
+- интеграция с `combox-api` для HTTP-запросов и взаимодействия в реальном времени
 
 ## Архитектура (высокоуровнево)
 
 ```text
-          Browser
+          Браузер
              |
              v
       [ ComBox App Vue ]
@@ -36,9 +37,10 @@ Vue 3 frontend для ComBox. Это основной UI мессенджера:
    +---------+-------------------------+
    |                                   |
    v                                   v
- Vue Router                      Chat workspace runtime
- /auth / /settings              sidebar, messages, overlays,
-                                info panel, composer, media
+ Vue Router                      Среда выполнения чата
+ /auth / /settings              боковая панель, сообщения,
+                                наложения, информационная
+                                панель, поле ввода, медиа
              |
              v
          combox-api
@@ -47,12 +49,12 @@ Vue 3 frontend для ComBox. Это основной UI мессенджера:
    backend REST + WebSocket endpoints
 ```
 
-## Особенности стека
+## Заметки о стеке
 
-- runtime приложения построен на Vue 3 SFC
-- bundling/dev server — Webpack
-- часть UI использует Vuetify primitives, но большая часть chat UI кастомная
-- пакет `combox-api` подключён локально из `../combox-api`
+- приложение работает на Vue 3 (однофайловые компоненты)
+- сборка и сервер разработки — Webpack
+- некоторые элементы интерфейса используют базовые компоненты Vuetify, но большая часть чата — кастомная
+- пакет `combox-api` подключается локально из `../combox-api`
 
 ## Скрипты
 
@@ -61,68 +63,69 @@ npm install
 npm run dev
 ```
 
-Основные команды:
+Основные скрипты:
 
-- `npm run dev` - webpack dev server на `0.0.0.0:4173`
-- `npm run build` - production webpack build + type check
-- `npm run check` - TypeScript project build/check
-- `npm run lint` - ESLint
-- `npm run preview` - раздача готового `dist/`
+- `npm run dev` — запуск dev-сервера Webpack на `0.0.0.0:4173`
+- `npm run build` — production-сборка Webpack + проверка типов
+- `npm run check` — сборка/проверка TypeScript-проекта
+- `npm run lint` — ESLint
+- `npm run preview` — предпросмотр собранной `dist/` папки
 
-## Runtime-настройки
+## Ожидаемое окружение
 
-По умолчанию приложение общается с backend через стандартные настройки `combox-api`:
+По умолчанию приложение обращается к бэкенду через настройки `combox-api`:
 
-- private API base выводится из browser location
-- WebSocket base выводится из browser location
+- базовый URL для private API определяется из адреса браузера
+- базовый URL для WebSocket определяется из адреса браузера
 
-При необходимости можно переопределить через env:
+При необходимости можно переопределить через переменные окружения:
 
 - `VITE_API_BASE_URL`
 - `VITE_WS_BASE_URL`
 
-## Основные зоны UI
+## Основные области интерфейса
 
-- `src/components/auth/` - auth flow
-- `src/components/chat/` - chat workspace, sidebar, composer, info panel, media, pickers
-- `src/pages/` - верхнеуровневые routed pages
-- `src/i18n/` - dictionaries и translation helpers
-- `src/utils/` - небольшие frontend helpers
+- `src/components/auth/` — процесс аутентификации
+- `src/components/chat/` — рабочая область чата, боковая панель, поле ввода, информационная панель, медиа, выборщики
+- `src/pages/` — корневые страницы по маршрутам
+- `src/i18n/` — словари и вспомогательные функции перевода
+- `src/utils/` — небольшие фронтенд-утилиты
 
 ## Структура проекта
 
-- `src/main.ts` - bootstrap приложения
-- `src/router/` - маршруты
-- `src/pages/` - page containers
-- `src/components/` - UI components
-- `src/i18n/dicts/` - локализованные строки
-- `public/` - статические assets и fonts
-- `webpack.config.cjs` - конфиг сборки
-- `Dockerfile` / `docker-compose*.yml` - контейнерные режимы запуска
+- `src/main.ts` — точка входа приложения
+- `src/router/` — маршруты
+- `src/pages/` — контейнеры страниц
+- `src/components/` — UI-компоненты
+- `src/i18n/dicts/` — локализованные строки
+- `public/` — статические файлы, шрифты
+- `webpack.config.cjs` — конфигурация сборщика
+- `Dockerfile` / `docker-compose*.yml` — режимы запуска в контейнерах
 
-## Заметки по разработке
+## Заметки для разработки
 
-- большая часть chat-логики живёт в `useChatWorkspace.runtime.ts`
-- весь UI text должен жить в dictionaries, а не в hardcoded строках
-- avatar fallback и theme tokens должны быть визуально согласованы между sidebar/chat/info/settings
-- локальная память/заметки по проекту лежат в `../_memory/`
+- большая часть поведения чата управляется из `useChatWorkspace.runtime.ts`
+- тексты интерфейса должны храниться в словарях, а не быть жёстко прописаны в коде
+- заглушки аватаров и токены темы должны оставаться визуально согласованными во всей боковой панели, чате, информационной панели и настройках
+- память проекта и документация по последним изменениям находятся в `../_memory/`
+- CI и security workflows чекаутят публичный `combox-api` рядом с приложением, потому что зависимость объявлена как `file:../combox-api`
 
-## Edge deployment
+## Развёртывание на периферии (edge)
 
-В репе уже есть edge-ориентированные compose-файлы:
+В репозитории есть файлы compose, ориентированные на периферийное развертывание:
 
 - `docker-compose.edge.yml`
 - `docker-compose.edge.dev.yml`
 
-Они рассчитаны на запуск behind `combox-edge`, обычно без прямой публичной публикации, кроме маршрута через edge gateway.
+Они предназначены для запуска приложения за `combox-edge`, обычно без прямого доступа к публичному хосту, кроме как через шлюз.
 
 ## Лицензия
 
 <a href="./LICENSE">
-  <img src=".github/assets/mit-badge.png" width="70" alt="MIT License">
+  <img src=".github/assets/mit-badge.png" width="70" alt="Лицензия MIT">
 </a>
 
-## Автор
+## Авторы
 
-[Ernela](https://github.com/Ernous) - Разработчица;
-[D7TUN6](https://github.com/D7TUN6) - Идея, разработчик
+[Ernela](https://github.com/Ernous) — разработчица;  
+[D7TUN6](https://github.com/D7TUN6) — идея, разработчик
