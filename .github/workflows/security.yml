@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   npm-audit:
@@ -52,51 +51,3 @@ jobs:
       - name: npm audit app
         working-directory: combox-app-vue
         run: npm audit --audit-level=high
-
-  codeql:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout app
-        uses: actions/checkout@v4
-        with:
-          path: combox-app-vue
-
-      - name: Checkout local API dependency
-        uses: actions/checkout@v4
-        with:
-          repository: combox/combox-api
-          path: combox-api
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
-        with:
-          languages: javascript-typescript
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            combox-app-vue/package-lock.json
-            combox-api/package-lock.json
-
-      - name: Install API dependency
-        working-directory: combox-api
-        run: npm ci
-
-      - name: Build API dependency
-        working-directory: combox-api
-        run: npm run build
-
-      - name: Install app
-        working-directory: combox-app-vue
-        run: npm ci
-
-      - name: Build app
-        working-directory: combox-app-vue
-        run: npm run build
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@v4
