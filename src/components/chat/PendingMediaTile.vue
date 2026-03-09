@@ -1,11 +1,6 @@
 <script setup lang="ts">
+import type { PendingFile } from '../../models/chat'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-
-type PendingFile = {
-  id: string
-  file: File
-  progress: number
-}
 
 const props = defineProps<{
   item: PendingFile
@@ -94,4 +89,3 @@ onBeforeUnmount(() => {
   color: rgba(0, 0, 0, 0.6);
 }
 </style>
-

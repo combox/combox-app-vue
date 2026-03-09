@@ -437,30 +437,39 @@ export default defineComponent({
   z-index: 2;
   overflow: hidden;
   background: #fff;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 140ms ease, visibility 0s linear 140ms;
 }
 
-/* Hide chat list when topics open — instant, no animation */
+/* Keep the list mounted so opening topics does not reflow the whole stage. */
 .sbStage.topics .sbChats {
-  display: none;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 100ms ease, visibility 0s linear 0s;
 }
 
-/* Topics panel: slides in from the right over the shelf */
+/* Topics panel: slide in via transform to avoid layout thrash. */
 .sbTopicsSlider {
   position: absolute;
-  top: 0; bottom: 0;
-  /* starts fully off screen to the right */
-  left: 100%;
-  right: -100%;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--shelf-w);
   z-index: 3;
   overflow: hidden;
-  transition: left var(--dur) var(--ease),
-              right var(--dur) var(--ease);
-  will-change: left, right;
+  transform: translateX(100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--dur) var(--ease), opacity 140ms ease;
+  will-change: transform, opacity;
 }
 
 .sbStage.topics .sbTopicsSlider {
-  left: var(--shelf-w);
-  right: 0;
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Inner floating: fills its container */

@@ -105,7 +105,10 @@ function onReact(emoji: string) {
 
 function imageGalleryStyle(attachments: ResolvedAttachment[]) {
   const columns = attachments.length >= 2 ? 2 : 1
-  return { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }
+  const minCellWidth = attachments.length >= 8 ? 132 : attachments.length >= 6 ? 144 : attachments.length >= 4 ? 156 : 176
+  return {
+    gridTemplateColumns: `repeat(${columns}, minmax(${minCellWidth}px, 1fr))`,
+  }
 }
 
 function openSenderInfo() {
@@ -505,18 +508,20 @@ function startComment() {
 }
 
 .bubbleAttachments.mediaOnlyGrid {
-  width: min(640px, 100%);
+  width: fit-content;
+  max-width: min(760px, calc(100vw - 72px));
 }
 
 .mbImageGallery {
-  width: min(640px, 100%);
-  max-width: 100%;
+  width: fit-content;
+  max-width: min(760px, calc(100vw - 72px));
   display: grid;
   gap: 4px;
 }
 
 .mbImageGallery.inBubble {
-  width: 100%;
+  width: fit-content;
+  max-width: min(760px, calc(100vw - 72px));
 }
 
 .mbGalleryItem {
@@ -530,6 +535,8 @@ function startComment() {
   display: block;
   background: transparent;
   aspect-ratio: 1 / 1;
+  content-visibility: auto;
+  contain: layout paint size;
 }
 
 .mbGalleryImage {
@@ -537,6 +544,7 @@ function startComment() {
   height: 100%;
   object-fit: cover;
   display: block;
+  border-radius: 0;
 }
 
 .mbMeta {

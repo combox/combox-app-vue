@@ -5,7 +5,7 @@ import type { AuthUser, ChatInviteLink, ChatItem, ChatMemberProfile, LocalProfil
 import { normalizeAvatarSrc } from './chatUtils'
 import type { ViewMessage } from './chatTypes'
 import GroupEditPanel from './GroupEditPanel.vue'
-import PublicChannelPanel from './PublicChannelPanel.vue'
+import ChannelPanel from './PublicChannelPanel.vue'
 import { useI18n } from '../../i18n/i18n'
 
 const props = defineProps<{
@@ -30,6 +30,7 @@ const emit = defineEmits<{
     title: string
     avatarDataUrl?: string | null
     commentsEnabled?: boolean
+    reactionsEnabled?: boolean
     isPublic?: boolean
     publicSlug?: string | null
     onSuccess: () => void
@@ -39,8 +40,8 @@ const emit = defineEmits<{
   updateMemberRole: [payload: { userID: string; role: 'member' | 'moderator' | 'admin' | 'subscriber' | 'banned' }]
   removeMember: [userID: string]
   leaveChat: [payload: { onSuccess: () => void; onError: (message: string) => void }]
-  subscribePublicChannel: []
-  unsubscribePublicChannel: []
+  subscribeChannel: []
+  unsubscribeChannel: []
   createInviteLink: [title?: string]
   openDirectChat: [userID: string]
   toggleMuteChat: []
@@ -111,7 +112,7 @@ const memberItems = computed(() =>
   }),
 )
 const currentGroupRole = computed(() => {
-  if (isPublicChannel.value) return ((props.selectedChat?.viewer_role || '').trim().toLowerCase())
+  if (isStandaloneChannel.value) return ((props.selectedChat?.viewer_role || '').trim().toLowerCase())
   if (props.selectedChat?.is_direct) return ''
   const currentUserID = (props.currentUser?.id || '').trim()
   if (!currentUserID) return ''
@@ -119,14 +120,14 @@ const currentGroupRole = computed(() => {
   return (ownMember?.role || '').trim().toLowerCase()
 })
 const canManageGroup = computed(() => currentGroupRole.value === 'owner' || currentGroupRole.value === 'admin' || currentGroupRole.value === 'moderator')
-const isPublicChannel = computed(() => (props.selectedChat?.kind || '').trim() === 'public_channel')
-const canViewPublicChannelMembers = computed(() => {
-  if (!isPublicChannel.value) return true
+const isStandaloneChannel = computed(() => (props.selectedChat?.kind || '').trim() === 'standalone_channel')
+const canViewChannelMembers = computed(() => {
+  if (!isStandaloneChannel.value) return true
   return currentGroupRole.value === 'owner' || currentGroupRole.value === 'admin'
 })
 const publicSubscriberCount = computed(() => Number(props.selectedChat?.subscriber_count || props.chatMembers.length || 0))
-const isSubscribedToPublicChannel = computed(() => {
-  if (!isPublicChannel.value) return false
+const isSubscribedToChannel = computed(() => {
+  if (!isStandaloneChannel.value) return false
   return ['owner', 'admin', 'subscriber'].includes(currentGroupRole.value)
 })
 const mediaItems = computed(() =>
@@ -223,8 +224,8 @@ function openGroupSettings() {
 
 <template>
   <aside v-show="open" ref="rootRef" class="ipRoot">
-    <PublicChannelPanel
-      v-if="selectedChat && isPublicChannel"
+    <ChannelPanel
+      v-if="selectedChat && isStandaloneChannel"
       :selected-chat="selectedChat"
       :subtitle="subtitle"
       :current-user="currentUser"
@@ -236,8 +237,8 @@ function openGroupSettings() {
       @save-profile="emit('saveGroupProfile', $event)"
       @update-member-role="emit('updateMemberRole', $event)"
       @remove-member="emit('removeMember', $event)"
-      @subscribe="emit('subscribePublicChannel')"
-      @unsubscribe="emit('unsubscribePublicChannel')"
+      @subscribe="emit('subscribeChannel')"
+      @unsubscribe="emit('unsubscribeChannel')"
       @create-invite-link="emit('createInviteLink', $event)"
       @open-direct-chat="emit('openDirectChat', $event)"
       @toggle-mute="emit('toggleMuteChat')"
@@ -316,21 +317,21 @@ function openGroupSettings() {
 
     <div class="ipBody">
       <div v-if="activeTab === 'members'" class="ipList">
-        <div v-if="isPublicChannel" class="ipChannelSummary">
+        <div v-if="isStandaloneChannel" class="ipChannelSummary">
           <div class="ipChannelCount">
             <div class="ipChannelCountValue">{{ publicSubscriberCount }}</div>
             <div class="ipChannelCountLabel">{{ t('chat.subscribers', { count: publicSubscriberCount }, `${publicSubscriberCount} subscribers`) }}</div>
           </div>
           <button
-            v-if="!canViewPublicChannelMembers"
+            v-if="!canViewChannelMembers"
             type="button"
             class="ipSubscribeBtn"
-            @click="isSubscribedToPublicChannel ? emit('unsubscribePublicChannel') : emit('subscribePublicChannel')"
+            @click="isSubscribedToChannel ? emit('unsubscribeChannel') : emit('subscribeChannel')"
           >
-            {{ isSubscribedToPublicChannel ? t('chat.unsubscribe', undefined, 'Unsubscribe') : t('chat.subscribe', undefined, 'Subscribe') }}
+            {{ isSubscribedToChannel ? t('chat.unsubscribe', undefined, 'Unsubscribe') : t('chat.subscribe', undefined, 'Subscribe') }}
           </button>
         </div>
-        <template v-if="canViewPublicChannelMembers && memberItems.length > 0">
+        <template v-if="canViewChannelMembers && memberItems.length > 0">
           <div v-for="item in memberItems" :key="item.id" class="ipMemberItem">
             <div class="ipMemberAvatar">
               <img v-if="item.avatarSrc" :src="item.avatarSrc" alt="" class="ipMemberAvatarImg" />
@@ -345,7 +346,7 @@ function openGroupSettings() {
             </div>
           </div>
         </template>
-        <div v-else-if="canViewPublicChannelMembers" class="ipEmpty">{{ t('chat.no_participants') }}</div>
+        <div v-else-if="canViewChannelMembers" class="ipEmpty">{{ t('chat.no_participants') }}</div>
       </div>
 
       <div v-else-if="activeTab === 'media'" class="ipMediaGrid">

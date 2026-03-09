@@ -1,10 +1,8 @@
-SHELL := /bin/bash
-
 DC := docker compose -f docker-compose.yml
 EDGE_DC := docker compose -f docker-compose.edge.yml
 EDGE_DEV_DC := docker compose -f docker-compose.edge.yml -f docker-compose.edge.dev.yml
 
-.PHONY: up down rebuild logs ps check test-e2e edge-up edge-dev edge-down edge-logs edge-dev-logs
+.PHONY: up down rebuild logs ps check test-e2e edge-up edge-dev edge-down edge-logs edge-dev-logs commit
 
 up:
 	$(DC) up -d combox-app
@@ -47,3 +45,6 @@ edge-logs:
 
 edge-dev-logs:
 	$(EDGE_DEV_DC) logs -f --tail=120 combox-app-vue
+
+commit:
+	node scripts/commit.js "$(branch)" "$(message)"

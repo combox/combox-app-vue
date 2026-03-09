@@ -14,9 +14,12 @@ const emit = defineEmits<{
   openVideo: [payload: { attachmentID: string; src: string; poster?: string; filename?: string }]
 }>()
 
+const rootEl = ref<HTMLElement | null>(null)
 const imageSrc = ref(props.attachment.previewUrl || props.attachment.url)
 const fullLoaded = ref(!props.attachment.previewUrl)
 let preloadImage: HTMLImageElement | null = null
+let io: IntersectionObserver | null = null
+const isNearViewport = ref(false)
 
 const isGif = computed(() => {
   const type = (props.attachment.mimeType || '').toLowerCase()
@@ -31,6 +34,16 @@ const shouldFreezeAnimatedMedia = computed(() => isGif.value && (props.mediaOver
 
 const numericWidth = () => (props.attachment.width > 0 ? props.attachment.width : 0)
 const numericHeight = () => (props.attachment.height > 0 ? props.attachment.height : 0)
+
+const lockedDims = ref<{ width: number; height: number }>({ width: numericWidth() || 0, height: numericHeight() || 0 })
+
+watch(
+  () => props.attachment.id,
+  () => {
+    lockedDims.value = { width: numericWidth() || 0, height: numericHeight() || 0 }
+  },
+  { immediate: true },
+)
 
 function resetImageState() {
   imageSrc.value = props.attachment.previewUrl || props.attachment.url
@@ -47,6 +60,8 @@ function cleanupPreload() {
 function scheduleFullImageLoad() {
   cleanupPreload()
   if (!props.attachment.url) return
+
+  if (!isNearViewport.value) return
 
   if (shouldFreezeAnimatedMedia.value) {
     imageSrc.value = props.attachment.previewUrl || props.attachment.url
@@ -102,15 +117,33 @@ function onVisibilityChange() {
 
 onMounted(() => {
   document.addEventListener('visibilitychange', onVisibilityChange)
+
+  if (props.attachment.kind === 'image') {
+    io = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0]
+        const near = Boolean(entry && entry.isIntersecting)
+        if (near === isNearViewport.value) return
+        isNearViewport.value = near
+        if (near) scheduleFullImageLoad()
+      },
+      { root: null, rootMargin: '600px 0px', threshold: 0.01 },
+    )
+    if (rootEl.value) io.observe(rootEl.value)
+  }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (io) {
+    io.disconnect()
+    io = null
+  }
 })
 
 function imageSizeStyle() {
-  const width = numericWidth() || 320
-  const height = numericHeight() || 320
+  const width = lockedDims.value.width || 320
+  const height = lockedDims.value.height || 320
   return {
     ['--media-target-width' as string]: `${Math.max(180, Math.min(420, width))}px`,
     ['--media-aspect-ratio' as string]: `${width} / ${height}`,
@@ -118,8 +151,8 @@ function imageSizeStyle() {
 }
 
 function videoSizeStyle() {
-  const width = numericWidth() || 320
-  const height = numericHeight() || 180
+  const width = lockedDims.value.width || 320
+  const height = lockedDims.value.height || 180
   return {
     ['--media-target-width' as string]: `${Math.max(180, Math.min(420, width))}px`,
     ['--media-aspect-ratio' as string]: `${width} / ${height}`,
@@ -135,12 +168,16 @@ function videoSizeStyle() {
     :style="imageSizeStyle()"
     :disabled="!attachment.url"
     @click="attachment.url && emit('openImage', attachment.url)"
+    ref="rootEl"
   >
     <template v-if="imageSrc">
       <img
         :src="imageSrc"
         :class="['media-image', { 'is-preview': !fullLoaded && Boolean(attachment.previewUrl) }]"
         :alt="attachment.filename || 'image'"
+        loading="lazy"
+        decoding="async"
+        fetchpriority="low"
       />
       <span v-if="!fullLoaded && Boolean(attachment.previewUrl)" class="media-image-blur" aria-hidden="true" />
     </template>
@@ -184,8 +221,11 @@ function videoSizeStyle() {
   display: block;
   width: var(--media-target-width);
   aspect-ratio: var(--media-aspect-ratio);
+  content-visibility: auto;
+  contain: layout paint size;
   padding: 0;
   border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
   background: #e6e6e6;
   overflow: hidden;
   cursor: pointer;
@@ -200,6 +240,7 @@ function videoSizeStyle() {
   height: 100%;
   object-fit: cover;
   display: block;
+  border-radius: 0;
 }
 
 .media-image.is-preview {
@@ -210,8 +251,7 @@ function videoSizeStyle() {
 .media-image-blur {
   position: absolute;
   inset: 0;
-  backdrop-filter: blur(8px);
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.12);
   pointer-events: none;
 }
 

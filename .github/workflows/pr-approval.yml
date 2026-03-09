@@ -1,0 +1,44 @@
+name: PR Approval Gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  approval:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require at least one approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            });
+
+            const latestStateByUser = new Map();
+            for (const review of reviews) {
+              if (review.user?.login) {
+                latestStateByUser.set(review.user.login, review.state);
+              }
+            }
+
+            const approvals = [...latestStateByUser.values()].filter((state) => state === 'APPROVED').length;
+            core.info(`Approvals found: ${approvals}`);
+
+            if (approvals < 1) {
+              core.setFailed('At least one approving review is required before merge.');
+            }

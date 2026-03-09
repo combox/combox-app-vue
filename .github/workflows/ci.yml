@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: combox-app-vue
+
+      - name: Checkout local API dependency
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/combox-api
+          path: combox-api
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            combox-app-vue/package-lock.json
+            combox-api/package-lock.json
+
+      - name: Install API dependency
+        working-directory: combox-api
+        run: npm ci
+
+      - name: Build API dependency
+        working-directory: combox-api
+        run: npm run build
+
+      - name: Install app
+        working-directory: combox-app-vue
+        run: npm ci
+
+      - name: Lint app
+        working-directory: combox-app-vue
+        run: npm run lint
+
+      - name: Type check app
+        working-directory: combox-app-vue
+        run: npm run check
+
+      - name: Build app
+        working-directory: combox-app-vue
+        run: npm run build

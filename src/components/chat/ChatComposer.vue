@@ -2,14 +2,9 @@
 import type { GIFItem } from 'combox-api'
 import { defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from '../../i18n/i18n'
+import type { PendingFile } from '../../models/chat'
 import PendingMediaTile from './PendingMediaTile.vue'
 import type { ViewMessage } from './chatTypes'
-
-type PendingFile = {
-  id: string
-  file: File
-  progress: number
-}
 
 const INPUT_TEXTAREA_MIN_HEIGHT = 26
 const INPUT_TEXTAREA_MAX_HEIGHT = 168

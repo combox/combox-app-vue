@@ -97,7 +97,7 @@ const {
   closeGroupChannelsPanel,
   createGroupChat,
   createChannelForSelectedGroup,
-  createPublicChannelChat,
+  createStandaloneChannelChat,
   createSelectedChatInviteLink,
   updateSelectedGroupProfile,
   leaveSelectedChat,
@@ -106,14 +106,14 @@ const {
   updateSelectedGroupMemberRole,
   removeSelectedGroupMember,
   toggleMuteSelectedChat,
-  subscribeSelectedPublicChannel,
-  unsubscribeSelectedPublicChannel,
+  subscribeSelectedChannel,
+  unsubscribeSelectedChannel,
   sendDraft,
 } = useChatWorkspace()
 
 const isMediaOverlayOpen = computed(() => Boolean(photoViewerSrc.value) || Boolean(videoViewer.value))
 const discussionRootMessage = ref<(typeof messages.value)[number] | null>(null)
-const inDiscussionMode = computed(() => Boolean(discussionRootMessage.value && selectedChat.value?.kind === 'public_channel'))
+const inDiscussionMode = computed(() => Boolean(discussionRootMessage.value && selectedChat.value?.kind === 'standalone_channel'))
 const composerReplyTarget = computed(() => (inDiscussionMode.value ? discussionRootMessage.value : replyToMessage.value))
 const renderedMessages = computed(() => {
   if (!inDiscussionMode.value || !discussionRootMessage.value) return filteredMessages.value
@@ -206,9 +206,9 @@ function closeDiscussion() {
   clearReplyToMessage()
 }
 
-const canModerateSelectedPublicChannel = computed(() => {
+const canModerateSelectedChannel = computed(() => {
   const active = selectedChat.value
-  if (!active || (active.kind || '').trim() !== 'public_channel') return false
+  if (!active || (active.kind || '').trim() !== 'standalone_channel') return false
   const role = (active.viewer_role || '').trim().toLowerCase()
   return role === 'owner' || role === 'admin'
 })
@@ -216,29 +216,29 @@ const canModerateSelectedPublicChannel = computed(() => {
 const canSendInSelectedChat = computed(() => {
   const active = selectedChat.value
   if (!active) return false
-  if ((active.kind || '').trim() !== 'public_channel') return true
-  return canModerateSelectedPublicChannel.value
+  if ((active.kind || '').trim() !== 'standalone_channel') return true
+  if (inDiscussionMode.value) return Boolean(active.comments_enabled ?? true)
+  return canModerateSelectedChannel.value
 })
 
 const canReactInSelectedChat = computed(() => {
   const active = selectedChat.value
   if (!active) return false
-  if ((active.kind || '').trim() !== 'public_channel') return true
-  const role = (active.viewer_role || '').trim().toLowerCase()
-  return role === 'owner' || role === 'admin' || role === 'subscriber'
+  if ((active.kind || '').trim() !== 'standalone_channel') return true
+  return Boolean(active.reactions_enabled ?? true)
 })
 
-const showPublicChannelViewerBar = computed(() => {
+const showChannelViewerBar = computed(() => {
   const active = selectedChat.value
   if (!active || !hasActiveChat.value || inDiscussionMode.value) return false
-  return (active.kind || '').trim() === 'public_channel' && !canSendInSelectedChat.value
+  return (active.kind || '').trim() === 'standalone_channel' && !canSendInSelectedChat.value
 })
 
 const canEditContextMessage = computed(() => {
   const target = contextMenu.value?.message
   if (!target) return false
   if ((target.raw.user_id || '').trim() === (currentUser?.id || '').trim()) return true
-  return canModerateSelectedPublicChannel.value
+  return canModerateSelectedChannel.value
 })
 
 const canDeleteContextMessage = computed(() => canEditContextMessage.value)
@@ -264,7 +264,7 @@ async function handleCreateChannel(input: {
 }) {
   try {
     if (typeof input.isPublic === 'boolean') {
-      await createPublicChannelChat(input.title, input.publicSlug || '', input.isPublic)
+      await createStandaloneChannelChat(input.title, input.publicSlug || '', input.isPublic)
       if (input.avatarDataUrl) {
         await updateSelectedGroupProfile({ title: input.title, avatarDataUrl: input.avatarDataUrl })
       }
@@ -289,6 +289,7 @@ async function handleSaveGroupProfile(input: {
   title: string
   avatarDataUrl?: string | null
   commentsEnabled?: boolean
+  reactionsEnabled?: boolean
   isPublic?: boolean
   publicSlug?: string | null
   onSuccess: () => void
@@ -299,6 +300,7 @@ async function handleSaveGroupProfile(input: {
       title: input.title,
       avatarDataUrl: input.avatarDataUrl,
       commentsEnabled: input.commentsEnabled,
+      reactionsEnabled: input.reactionsEnabled,
       isPublic: input.isPublic,
       publicSlug: input.publicSlug,
     })
@@ -451,7 +453,7 @@ onBeforeUnmount(() => {
             :messages="renderedMessages"
             :selected-chat-i-d="selectedChatID"
             :discussion-mode="inDiscussionMode"
-            :is-public-channel="Boolean(selectedChat && selectedChat.kind === 'public_channel' && !inDiscussionMode)"
+            :is-public-channel="Boolean(selectedChat && selectedChat.kind === 'standalone_channel' && !inDiscussionMode)"
             :comments-enabled="Boolean(selectedChat?.comments_enabled ?? true)"
             :message-search="messageSearch"
             :error-text="errorText"
@@ -491,7 +493,7 @@ onBeforeUnmount(() => {
         </div>
       </transition>
 
-      <div v-if="hasActiveChat && !showPublicChannelViewerBar" class="composerInline">
+      <div v-if="hasActiveChat && !showChannelViewerBar" class="composerInline">
         <ChatComposer
           :chat-key="selectedChatID"
           :sending="sending"
@@ -508,14 +510,14 @@ onBeforeUnmount(() => {
         />
       </div>
 
-      <div v-else-if="showPublicChannelViewerBar" class="viewerActionBar">
+      <div v-else-if="showChannelViewerBar" class="viewerActionBar">
         <button type="button" class="viewerIconBtn" :aria-label="t(Boolean(selectedChatID && mutedChatIDs[selectedChatID]) ? 'chat.unmute' : 'chat.mute')" @click="toggleMuteSelectedChat">
           <v-icon :icon="Boolean(selectedChatID && mutedChatIDs[selectedChatID]) ? 'mdi-bell-ring-outline' : 'mdi-bell-off-outline'" size="20" />
         </button>
         <button
           type="button"
           class="viewerPrimaryBtn"
-          @click="((selectedChat?.viewer_role || '').trim().toLowerCase() === 'subscriber' ? unsubscribeSelectedPublicChannel() : subscribeSelectedPublicChannel())"
+          @click="((selectedChat?.viewer_role || '').trim().toLowerCase() === 'subscriber' ? unsubscribeSelectedChannel() : subscribeSelectedChannel())"
         >
           {{
             (selectedChat?.viewer_role || '').trim().toLowerCase() === 'subscriber'
@@ -567,8 +569,8 @@ onBeforeUnmount(() => {
         @add-members="handleAddMembers"
         @update-member-role="handleUpdateMemberRole"
         @remove-member="handleRemoveMember"
-        @subscribe-public-channel="subscribeSelectedPublicChannel"
-        @unsubscribe-public-channel="unsubscribeSelectedPublicChannel"
+        @subscribe-channel="subscribeSelectedChannel"
+        @unsubscribe-channel="unsubscribeSelectedChannel"
         @create-invite-link="createSelectedChatInviteLink"
         @open-direct-chat="openDirectChatWithUser"
         @toggle-mute-chat="toggleMuteSelectedChat"
