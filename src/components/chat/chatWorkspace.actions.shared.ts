@@ -1,5 +1,5 @@
 import type { ComputedRef, Ref } from 'vue'
-import type { ChatInviteLink, ChatItem, ChatMemberProfile, MessageItem } from 'combox-api'
+import { listChatMembers, type ChatInviteLink, type ChatItem, type ChatMemberProfile, type MessageItem } from 'combox-api'
 import type { ViewMessage } from './chatTypes'
 import type { AttachmentView, MessageStatus, PendingFile } from './chatWorkspace.types'
 
@@ -9,7 +9,7 @@ export type LoadChats = () => Promise<void>
 export type LoadGroupChannels = (groupChatID: string) => Promise<void>
 export type LoadMessages = (chatID: string) => Promise<void>
 export type SelectChat = (chatID: string) => Promise<void>
-export type EnrichMembers = (items: any[]) => Promise<ChatMemberProfile[]>
+export type EnrichMembers = (items: Awaited<ReturnType<typeof listChatMembers>>) => Promise<ChatMemberProfile[]>
 
 export type GroupProfileInput = {
   title: string

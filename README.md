@@ -1,5 +1,7 @@
 # ComBox App Vue
 
+[![Code Quality](https://github.com/combox/combox-app-vue/actions/workflows/security.yml/badge.svg)](https://github.com/combox/combox-app-vue/actions/workflows/security.yml)
+
 [English](./README.md) | [Русский](./README.ru.md)
 
 Vue 3 frontend for ComBox. This repo contains the messenger UI, auth flow, chat workspace, settings sidebar, media viewers, and realtime integration through the local `combox-api` package.
@@ -53,6 +55,7 @@ Important:
 
 - actual merge protection and required approvals must be enabled in GitHub branch protection / rulesets
 - this repo expects `combox-api` to be checked out next to it because of `file:../combox-api`
+- CI and security workflows also require a `CI_REPO_ACCESS_TOKEN` secret with read access to `combox/combox-api` when that repo is private
 
 ## License
 

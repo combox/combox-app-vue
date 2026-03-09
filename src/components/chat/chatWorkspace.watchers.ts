@@ -6,6 +6,12 @@ type PresenceClientLike = {
   getPresence: (userIds: string[]) => Promise<Array<Record<string, unknown>>>
 }
 
+type PresenceSnapshot = {
+  online: boolean
+  last_seen?: string
+  last_seen_visible?: boolean
+}
+
 type SetupWorkspaceWatchersInput = {
   directoryQuery: ComputedRef<string>
   runDirectorySearch: (q: string) => Promise<void>
@@ -120,7 +126,7 @@ export function setupWorkspaceWatchers(input: SetupWorkspaceWatchersInput) {
       try {
         const items = await input.presenceClient.getPresence([id])
         if (!Array.isArray(items) || items.length === 0) return
-        const item = items[0] as any
+        const item = items[0] as PresenceSnapshot
         input.presenceByUserId.value = {
           ...input.presenceByUserId.value,
           [id]: {

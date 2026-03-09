@@ -47,7 +47,7 @@ export function createGroupActions(input: WorkspaceActionsInput) {
   async function toggleMuteSelectedChat() {
     const chatID = input.selectedChatID.value
     if (!chatID) return
-    const nextMuted = !Boolean(input.mutedChatIDs.value[chatID])
+    const nextMuted = !input.mutedChatIDs.value[chatID]
     input.mutedChatIDs.value = { ...input.mutedChatIDs.value, [chatID]: nextMuted }
     try {
       const payload = await setChatMuted(chatID, nextMuted)

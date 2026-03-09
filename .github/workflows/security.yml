@@ -13,23 +13,54 @@ permissions:
   security-events: write
 
 jobs:
-  dependency-review:
-    if: github.event_name == 'pull_request'
+  npm-audit:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      pull-requests: write
-
     steps:
-      - name: Checkout
+      - name: Checkout app
         uses: actions/checkout@v4
-
-      - name: Dependency review
-        uses: actions/dependency-review-action@v4
         with:
-          fail-on-severity: high
-          comment-summary-in-pr: always
+          path: combox-app-vue
+
+      - name: Validate API checkout token
+        run: |
+          if [ -z "${{ secrets.CI_REPO_ACCESS_TOKEN }}" ]; then
+            echo "Missing required secret: CI_REPO_ACCESS_TOKEN"
+            echo "Create a fine-grained PAT or GitHub App token with read access to combox/combox-api."
+            exit 1
+          fi
+
+      - name: Checkout local API dependency
+        uses: actions/checkout@v4
+        with:
+          repository: combox/combox-api
+          path: combox-api
+          token: ${{ secrets.CI_REPO_ACCESS_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            combox-app-vue/package-lock.json
+            combox-api/package-lock.json
+
+      - name: Install API dependency
+        working-directory: combox-api
+        run: npm ci
+
+      - name: npm audit API dependency
+        working-directory: combox-api
+        run: npm audit --audit-level=high
+
+      - name: Install app
+        working-directory: combox-app-vue
+        run: npm ci
+
+      - name: npm audit app
+        working-directory: combox-app-vue
+        run: npm audit --audit-level=high
 
   codeql:
     runs-on: ubuntu-latest
@@ -40,19 +71,50 @@ jobs:
         with:
           path: combox-app-vue
 
+      - name: Validate API checkout token
+        run: |
+          if [ -z "${{ secrets.CI_REPO_ACCESS_TOKEN }}" ]; then
+            echo "Missing required secret: CI_REPO_ACCESS_TOKEN"
+            echo "Create a fine-grained PAT or GitHub App token with read access to combox/combox-api."
+            exit 1
+          fi
+
       - name: Checkout local API dependency
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/combox-api
+          repository: combox/combox-api
           path: combox-api
+          token: ${{ secrets.CI_REPO_ACCESS_TOKEN }}
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            combox-app-vue/package-lock.json
+            combox-api/package-lock.json
+
+      - name: Install API dependency
+        working-directory: combox-api
+        run: npm ci
+
+      - name: Build API dependency
+        working-directory: combox-api
+        run: npm run build
+
+      - name: Install app
+        working-directory: combox-app-vue
+        run: npm ci
+
+      - name: Build app
+        working-directory: combox-app-vue
+        run: npm run build
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4

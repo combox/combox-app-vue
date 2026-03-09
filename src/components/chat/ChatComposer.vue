@@ -35,6 +35,7 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const draft = ref('')
 const pickerOpen = ref(false)
 let pickerPrefetchStarted = false
+type IdleCallbackHandle = Window & { requestIdleCallback?: (cb: () => void) => number }
 
 function prefetchPicker() {
   if (pickerPrefetchStarted) return
@@ -115,7 +116,7 @@ onMounted(() => {
   document.addEventListener('pointerdown', onDocPointerDown)
   const preload = () => prefetchPicker()
   if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-    ;(window as Window & { requestIdleCallback?: (cb: IdleRequestCallback) => number }).requestIdleCallback?.(() => preload())
+    ;(window as IdleCallbackHandle).requestIdleCallback?.(() => preload())
   }
 })
 

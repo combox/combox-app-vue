@@ -9,6 +9,12 @@ type PresenceClientLike = {
   getPresence: (userIds: string[]) => Promise<Array<Record<string, unknown>>>
 }
 
+type PresenceSnapshot = {
+  online: boolean
+  last_seen?: string
+  last_seen_visible?: boolean
+}
+
 type CreateContextActionsInput = {
   currentUser: { id?: string } | null
   selectedChat: ComputedRef<ChatItem | null>
@@ -172,7 +178,7 @@ export function createContextActions(deps: CreateContextActionsInput) {
       return
     }
 
-    const fromMembers = deps.chatMembers.value.find((item: any) => (item.user_id || '').trim() === userID)?.profile
+    const fromMembers = deps.chatMembers.value.find((item) => (item.user_id || '').trim() === userID)?.profile
     const normalizedFromMembers = deps.normalizePeerProfile(fromMembers || null)
     if (normalizedFromMembers) {
       deps.focusedInfoUserProfile.value = normalizedFromMembers
@@ -189,7 +195,7 @@ export function createContextActions(deps: CreateContextActionsInput) {
     try {
       const items = await deps.presenceClient.getPresence([userID])
       if (Array.isArray(items) && items.length > 0) {
-        const item = items[0] as any
+        const item = items[0] as PresenceSnapshot
         deps.presenceByUserId.value = {
           ...deps.presenceByUserId.value,
           [userID]: {
@@ -218,7 +224,7 @@ export function createContextActions(deps: CreateContextActionsInput) {
     deps.messageSearch.value = ''
   }
 
-  function openChatMenu(anchor: any) {
+  function openChatMenu(anchor: ChatMenuAnchor) {
     deps.chatMenuAnchor.value = anchor
   }
 

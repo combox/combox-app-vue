@@ -19,11 +19,20 @@ jobs:
         with:
           path: combox-app-vue
 
+      - name: Validate API checkout token
+        run: |
+          if [ -z "${{ secrets.CI_REPO_ACCESS_TOKEN }}" ]; then
+            echo "Missing required secret: CI_REPO_ACCESS_TOKEN"
+            echo "Create a fine-grained PAT or GitHub App token with read access to combox/combox-api."
+            exit 1
+          fi
+
       - name: Checkout local API dependency
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/combox-api
+          repository: combox/combox-api
           path: combox-api
+          token: ${{ secrets.CI_REPO_ACCESS_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

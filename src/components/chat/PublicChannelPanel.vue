@@ -66,15 +66,9 @@ const channelLink = computed(() => {
   return `${window.location.origin}${window.location.pathname}${window.location.search}#@${encodeURIComponent(slug)}`
 })
 const channelTypeLabel = computed(() => t('chat.channel', undefined, 'Channel'))
-const channelTypeValue = computed(() => props.selectedChat?.is_public ? t('chat.public', undefined, 'Public') : t('chat.private', undefined, 'Private'))
 const commentsEnabled = computed(() => Boolean(props.selectedChat?.comments_enabled ?? true))
 const reactionsEnabled = computed(() => Boolean(props.selectedChat?.reactions_enabled ?? true))
 const primaryInviteLink = computed(() => props.inviteLinks.find((item) => item.is_primary) || props.inviteLinks[0] || null)
-const externalInviteUrl = computed(() => {
-  const token = (primaryInviteLink.value?.token || '').trim()
-  if (!token || typeof window === 'undefined') return ''
-  return `${window.location.origin}${window.location.pathname}${window.location.search}#link:${encodeURIComponent(token)}`
-})
 
 const displayName = computed(() => (props.selectedChat?.title || '').trim() || t('chat.channel_info', undefined, 'Channel'))
 const avatarLetter = computed(() => displayName.value.slice(0, 1).toUpperCase() || 'C')

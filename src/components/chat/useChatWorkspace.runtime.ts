@@ -56,6 +56,18 @@ const attachmentRequests = new Map<string, Promise<void>>()
 const presenceClient = new ComboxClient()
 const directChatClient = new ComboxClient()
 
+function readEventPreview(payload: Record<string, unknown>): string {
+  if (typeof payload.preview === 'string' && payload.preview.trim()) return payload.preview
+  if (typeof payload.content === 'string' && payload.content.trim()) return payload.content
+  return ''
+}
+
+function readEventCreatedAt(payload: Record<string, unknown>): string {
+  if (typeof payload.createdAt === 'string' && payload.createdAt.trim()) return payload.createdAt
+  if (typeof payload.created_at === 'string' && payload.created_at.trim()) return payload.created_at
+  return ''
+}
+
 export function useChatWorkspace() {
   const { t } = useI18n()
   const cachedChats = readJSON<ChatItem[]>(CHATS_CACHE_KEY, [])
@@ -284,14 +296,14 @@ export function useChatWorkspace() {
     },
     onMessageCreated: (payload) => {
       applyUnreadFromIncoming(payload.chatID, payload.senderUserID, payload.messageID)
-      updateGroupChannelPreview(payload.chatID, (payload as any).preview || (payload as any).content || '', (payload as any).createdAt || (payload as any).created_at || '')
+      updateGroupChannelPreview(payload.chatID, readEventPreview(payload as Record<string, unknown>), readEventCreatedAt(payload as Record<string, unknown>))
       window.setTimeout(() => syncGroupChannelsPreviewFromChats(payload.chatID), 220)
       const groupID = findGroupIDByChannelID(payload.chatID)
       if (groupID) window.setTimeout(() => { void loadGroupChannels(groupID) }, 220)
     },
     onNotificationMessageCreated: (payload) => {
       applyUnreadFromIncoming(payload.chatID, payload.senderUserID, payload.messageID)
-      updateGroupChannelPreview(payload.chatID, (payload as any).preview || (payload as any).content || '', (payload as any).createdAt || (payload as any).created_at || '')
+      updateGroupChannelPreview(payload.chatID, readEventPreview(payload as Record<string, unknown>), readEventCreatedAt(payload as Record<string, unknown>))
       window.setTimeout(() => syncGroupChannelsPreviewFromChats(payload.chatID), 220)
       const groupID = findGroupIDByChannelID(payload.chatID)
       if (groupID) window.setTimeout(() => { void loadGroupChannels(groupID) }, 220)

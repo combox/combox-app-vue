@@ -1,6 +1,7 @@
 # ComBox App Vue
 
 ![banner](.github/assets/banner.png)
+[![Code Quality](https://github.com/combox/combox-app-vue/actions/workflows/security.yml/badge.svg)](https://github.com/combox/combox-app-vue/actions/workflows/security.yml)
 
 [English](./README.md) | [Русский](./README.ru.md)
 
@@ -107,6 +108,7 @@ npm run dev
 - тексты интерфейса должны храниться в словарях, а не быть жёстко прописаны в коде
 - заглушки аватаров и токены темы должны оставаться визуально согласованными во всей боковой панели, чате, информационной панели и настройках
 - память проекта и документация по последним изменениям находятся в `../_memory/`
+- для GitHub Actions нужен secret `CI_REPO_ACCESS_TOKEN` с правом чтения `combox/combox-api`, если этот соседний репозиторий приватный
 
 ## Развёртывание на периферии (edge)
 
