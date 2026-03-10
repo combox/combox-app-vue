@@ -2,8 +2,6 @@ services:
   combox-app-vue:
     build:
       context: .
-      additional_contexts:
-        combox_api: ../combox-api
       target: runtime
     container_name: combox-app-vue
     restart: unless-stopped

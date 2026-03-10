@@ -1,8 +1,11 @@
 FROM node:22-bookworm AS base
 WORKDIR /app/combox-app-vue
+ARG COMBOX_API_VERSION=latest
 COPY package*.json ./
-COPY --from=combox_api . /app/combox-api
-RUN node -e "const fs=require('fs');const p='/app/combox-api/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(j.scripts){delete j.scripts.prepare;delete j.scripts.build;}fs.writeFileSync(p,JSON.stringify(j,null,2));" \
+# The repo uses a local `file:../combox-api` dependency for dev. For container builds,
+# install the published npm package instead (no repo sibling checkout required).
+RUN rm -f package-lock.json \
+ && node -e "const fs=require('fs');const v=process.env.COMBOX_API_VERSION||'latest';const p='./package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.dependencies=j.dependencies||{};j.dependencies['combox-api']=v;fs.writeFileSync(p,JSON.stringify(j,null,2));" \
  && npm install --ignore-scripts
 
 FROM base AS dev
@@ -12,7 +15,6 @@ COPY index.html ./index.html
 COPY tsconfig.json ./tsconfig.json
 COPY tsconfig.app.json ./tsconfig.app.json
 COPY webpack.config.cjs ./webpack.config.cjs
-COPY .env ./.env
 EXPOSE 4173
 CMD ["npm", "run", "dev"]
 
@@ -23,7 +25,6 @@ COPY index.html ./index.html
 COPY tsconfig.json ./tsconfig.json
 COPY tsconfig.app.json ./tsconfig.app.json
 COPY webpack.config.cjs ./webpack.config.cjs
-COPY .env ./.env
 RUN npm run build
 
 FROM node:22-bookworm AS runtime
@@ -38,9 +39,10 @@ CMD ["npm", "run", "preview"]
 
 FROM mcr.microsoft.com/playwright:v1.52.0-noble AS e2e
 WORKDIR /tests
-COPY --from=combox_api . /combox-api
 COPY package*.json ./
-RUN node -e "const fs=require('fs');const p='/combox-api/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(j.scripts){delete j.scripts.prepare;delete j.scripts.build;}fs.writeFileSync(p,JSON.stringify(j,null,2));" \
+ARG COMBOX_API_VERSION=latest
+RUN rm -f package-lock.json \
+ && node -e "const fs=require('fs');const v=process.env.COMBOX_API_VERSION||'latest';const p='./package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.dependencies=j.dependencies||{};j.dependencies['combox-api']=v;fs.writeFileSync(p,JSON.stringify(j,null,2));" \
  && npm install --ignore-scripts
 COPY src ./src
 COPY public ./public
@@ -48,5 +50,4 @@ COPY index.html ./index.html
 COPY tsconfig.json ./tsconfig.json
 COPY tsconfig.app.json ./tsconfig.app.json
 COPY webpack.config.cjs ./webpack.config.cjs
-COPY .env ./.env
 CMD ["npm", "run", "test:e2e"]
