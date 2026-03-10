@@ -15,12 +15,19 @@ on:
         required: false
         default: false
         type: boolean
+      combox_api_version:
+        description: combox-api npm version to bake into the image (e.g. 0.1.0 or latest)
+        required: false
+        default: latest
+        type: string
 
 permissions:
   contents: write
+  packages: write
 
 env:
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/combox-app-vue
+  DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/combox-app-vue
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/combox-app-vue
 
 jobs:
   build-and-push:
@@ -44,6 +51,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Resolve tags
         id: meta
         shell: bash
@@ -53,20 +67,22 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
             TAG="${{ github.event.release.tag_name }}"
             PUSH_LATEST=true
+            API_VERSION="latest"
           else
             TAG="${{ inputs.tag }}"
             PUSH_LATEST="${{ inputs.push_latest }}"
+            API_VERSION="${{ inputs.combox_api_version }}"
           fi
 
-          TAGS="${IMAGE_NAME}:${TAG}"
+          TAGS="${DOCKERHUB_IMAGE}:${TAG},${GHCR_IMAGE}:${TAG}"
           if [[ "${PUSH_LATEST}" == "true" ]]; then
-            TAGS="${TAGS},${IMAGE_NAME}:latest"
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:latest,${GHCR_IMAGE}:latest"
           fi
 
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
 
-          PRIMARY_TAG="${IMAGE_NAME}:${TAG}"
-          echo "primary_tag=${PRIMARY_TAG}" >> "$GITHUB_OUTPUT"
+          echo "primary_tag=${DOCKERHUB_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "api_version=${API_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         id: build
@@ -74,6 +90,8 @@ jobs:
         with:
           context: combox-app-vue
           file: combox-app-vue/Dockerfile
+          build-args: |
+            COMBOX_API_VERSION=${{ steps.meta.outputs.api_version }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
@@ -87,7 +105,8 @@ jobs:
 
           mkdir -p dist
           {
-            echo "image=${IMAGE_NAME}"
+            echo "dockerhub_image=${DOCKERHUB_IMAGE}"
+            echo "ghcr_image=${GHCR_IMAGE}"
             echo "tags=${{ steps.meta.outputs.tags }}"
             echo "primary_tag=${{ steps.meta.outputs.primary_tag }}"
             echo "digest=${{ steps.build.outputs.digest }}"
@@ -105,20 +124,25 @@ jobs:
         if: ${{ github.event_name == 'release' }}
         uses: actions/github-script@v7
         env:
-          DOCKERHUB_URL: https://hub.docker.com/r/${{ env.IMAGE_NAME }}
+          DOCKERHUB_URL: https://hub.docker.com/r/${{ env.DOCKERHUB_IMAGE }}
+          GHCR_URL: https://github.com/orgs/${{ github.repository_owner }}/packages/container/package/combox-app-vue
         with:
           script: |
             const release = context.payload.release;
             const primaryTag = `${{ steps.meta.outputs.primary_tag }}`;
             const digest = `${{ steps.build.outputs.digest }}`;
             const dockerHubUrl = process.env.DOCKERHUB_URL;
+            const ghcrUrl = process.env.GHCR_URL;
+            const ghcrPull = `${{ env.GHCR_IMAGE }}:${{ github.event.release.tag_name }}`;
 
             const snippet = [
               "\n\n---\n\n## Docker image\n",
               `Docker Hub: ${dockerHubUrl}\n`,
+              `GHCR: ${ghcrUrl}\n`,
               "\nPull:\n",
               "```bash\n",
               `docker pull ${primaryTag}\n`,
+              `docker pull ${ghcrPull}\n`,
               "```\n",
               "\nPull by digest (immutable):\n",
               "```bash\n",
