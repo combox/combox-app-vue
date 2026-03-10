@@ -400,11 +400,11 @@ export default defineComponent({
 
 <style scoped>
 .sbRoot {
-  border-right: 1px solid rgba(0,0,0,.12);
+  border-right: 1px solid var(--border);
   overflow: hidden;
   height: 100%;
   min-height: 0;
-  background: #f3f3f3;
+  background: var(--bg-elevated);
   position: relative;
 }
 
@@ -417,7 +417,7 @@ export default defineComponent({
   --shelf-w: 72px;
   --dur: 260ms;
   --ease: cubic-bezier(.25, .46, .45, .94);
-  background: #f4f4f4;
+  background: var(--bg-elevated);
 }
 
 /* Shelf: always at left, always visible, no animation at all */
@@ -427,7 +427,7 @@ export default defineComponent({
   width: var(--shelf-w);
   z-index: 1;
   overflow: hidden;
-  background: #f4f4f4;
+  background: var(--bg-elevated);
 }
 
 /* Full chat list: full size, just fades out instantly when topics open */
@@ -436,7 +436,7 @@ export default defineComponent({
   inset: 0;
   z-index: 2;
   overflow: hidden;
-  background: #fff;
+  background: var(--surface);
   opacity: 1;
   visibility: visible;
   transition: opacity 140ms ease, visibility 0s linear 140ms;
@@ -477,8 +477,8 @@ export default defineComponent({
   position: absolute;
   inset: 0;
   overflow: hidden;
-  background: #f3f3f3;
-  border-left: 1px solid rgba(0,0,0,.1);
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
 }
 
 @media (max-width: 960px) {
@@ -487,23 +487,24 @@ export default defineComponent({
 
 /* Dialogs */
 .sbDialogOverlay { position:absolute; inset:0; z-index:20; background:rgba(0,0,0,.18); display:grid; place-items:start center; padding:84px 12px 12px; }
-.sbDialog { width:min(100%,340px); background:#fff; border:1px solid rgba(0,0,0,.12); border-radius:8px; box-shadow:0 18px 48px rgba(0,0,0,.18); padding:14px; display:grid; gap:10px; }
-.sbDialogTitle { font-size:16px; font-weight:700; color:rgba(0,0,0,.88); }
-.sbDialogText { font-size:13px; color:rgba(0,0,0,.58); }
-.sbFieldInput { height:36px; border:1px solid rgba(0,0,0,.18); border-radius:6px; padding:0 10px; font-size:14px; }
+.sbDialog { width:min(100%,340px); background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:0 18px 48px rgba(0,0,0,.22); padding:14px; display:grid; gap:10px; }
+.sbDialogTitle { font-size:16px; font-weight:800; color:var(--text); }
+.sbDialogText { font-size:13px; color:var(--text-muted); }
+.sbFieldInput { height:36px; border:1px solid var(--border); border-radius:8px; padding:0 10px; font-size:14px; background:var(--surface-soft); color:var(--text); outline:none; }
+.sbFieldInput:focus { border-color: rgba(74, 144, 217, 0.38); box-shadow: 0 0 0 4px rgba(74, 144, 217, 0.12); }
 .sbDialogInput { width:100%; }
 .sbDialogUsers { max-height:180px; overflow-y:auto; display:grid; gap:6px; }
-.sbDialogUser { width:100%; padding:8px; border:1px solid rgba(0,0,0,.1); border-radius:6px; background:#fff; text-align:left; cursor:pointer; }
-.sbDialogUserName { font-size:13px; font-weight:700; color:rgba(0,0,0,.86); }
-.sbDialogUserMeta { font-size:12px; color:rgba(0,0,0,.56); }
+.sbDialogUser { width:100%; padding:8px; border:1px solid var(--border); border-radius:10px; background:var(--surface-soft); text-align:left; cursor:pointer; }
+.sbDialogUserName { font-size:13px; font-weight:800; color:var(--text); }
+.sbDialogUserMeta { font-size:12px; color:var(--text-muted); }
 .sbAvatarPicker { width:88px; height:88px; margin:0 auto 2px; padding:0; border:0; border-radius:50%; overflow:hidden; background:transparent; appearance:none; -webkit-appearance:none; display:grid; place-items:center; cursor:pointer; }
 .sbAvatarPickerImg { width:100%; height:100%; object-fit:cover; display:block; }
-.sbAvatarPickerFallback { width:100%; height:100%; border-radius:50%; display:grid; place-items:center; background:#7ea8d4; color:#fff; font-size:32px; font-weight:700; }
-.sbDialogError { font-size:12px; color:#c62828; }
+.sbAvatarPickerFallback { width:100%; height:100%; border-radius:50%; display:grid; place-items:center; background:var(--avatar-fallback); color:#fff; font-size:32px; font-weight:800; }
+.sbDialogError { font-size:12px; color:#ef4444; }
 .sbDialogActions { display:flex; justify-content:flex-end; gap:8px; }
-.sbDialogBtn { min-width:86px; height:34px; border:0; border-radius:6px; background:#1976d2; color:#fff; font-size:13px; font-weight:600; cursor:pointer; }
-.sbDialogBtn.muted { background:rgba(0,0,0,.08); color:rgba(0,0,0,.72); }
+.sbDialogBtn { min-width:86px; height:34px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:13px; font-weight:800; cursor:pointer; }
+.sbDialogBtn.muted { background:var(--surface-soft); color:var(--text-soft); border:1px solid var(--border); }
 .sbTypeSwitch { display:flex; gap:8px; }
-.sbTypeBtn { flex:1 1 0; height:34px; border:1px solid rgba(0,0,0,.12); border-radius:999px; background:#fff; color:rgba(0,0,0,.68); font-size:13px; font-weight:600; cursor:pointer; }
-.sbTypeBtn.active { background:#1976d2; border-color:#1976d2; color:#fff; }
+.sbTypeBtn { flex:1 1 0; height:34px; border:1px solid var(--border); border-radius:999px; background:var(--surface-soft); color:var(--text-soft); font-size:13px; font-weight:800; cursor:pointer; }
+.sbTypeBtn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
 </style>

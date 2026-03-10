@@ -16,6 +16,7 @@ const {
   currentUser,
   localProfile,
   selectedChatID,
+  activeMessagesChatID,
   selectedChat,
   hasActiveChat,
   chats,
@@ -206,6 +207,51 @@ function closeDiscussion() {
   clearReplyToMessage()
 }
 
+const isPhoneLayout = ref(false)
+const isTabletLayout = ref(false)
+
+function syncViewportLayout() {
+  const width = typeof window === 'undefined' ? 1024 : window.innerWidth
+  isPhoneLayout.value = width <= 720
+  isTabletLayout.value = width > 720 && width <= 1024
+}
+
+// On phones, selecting a group opens the topics list first; the conversation opens only after a topic is chosen.
+const mobileConversationOpen = computed(() => Boolean(isPhoneLayout.value && hasActiveChat.value && !showGroupChannelsPanel.value))
+
+function handleConversationBack() {
+  if (inDiscussionMode.value) {
+    closeDiscussion()
+    return
+  }
+  if (!isPhoneLayout.value) return
+
+  const active = selectedChat.value
+  const kind = String(active?.kind || '').trim()
+  const groupID = String(active?.id || '').trim()
+
+  if (kind === 'group' && groupID) {
+    // Phone UX: back from a topic conversation goes to the topics list (same selected group).
+    selectChat(groupID)
+    return
+  }
+
+  selectChat('')
+}
+
+function handleSelectGroupChannel(channelChatID: string) {
+  selectGroupChannel(channelChatID)
+  if (isPhoneLayout.value) closeGroupChannelsPanel()
+}
+
+function handleCloseGroupChannels() {
+  if (isPhoneLayout.value) {
+    selectChat('')
+    return
+  }
+  closeGroupChannelsPanel()
+}
+
 const canModerateSelectedChannel = computed(() => {
   const active = selectedChat.value
   if (!active || (active.kind || '').trim() !== 'standalone_channel') return false
@@ -365,68 +411,90 @@ function onGlobalEscape(event: KeyboardEvent) {
     closeMessageSearch()
     return
   }
-  if (hasActiveChat.value) {
-    selectChat('')
+
+  const target = event.target as { tagName?: string; isContentEditable?: boolean } | null
+  const tag = String(target?.tagName || '').toLowerCase()
+  const isTypingTarget = tag === 'input' || tag === 'textarea' || Boolean(target?.isContentEditable)
+  if (isTypingTarget) return
+
+  if (!hasActiveChat.value) return
+  const active = selectedChat.value
+  const kind = String(active?.kind || '').trim()
+  const groupID = String(active?.id || '').trim()
+  const activeChatID = String(activeMessagesChatID.value || '').trim()
+
+  // In group chats, ESC should exit the active topic/channel first (back to the group root),
+  // not close the whole chat view.
+  if (kind === 'group' && groupID && activeChatID && activeChatID !== groupID) {
+    selectGroupChannel(groupID)
+    return
   }
+
+  selectChat('')
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', onGlobalEscape)
+  syncViewportLayout()
+  window.addEventListener('resize', syncViewportLayout)
+  window.addEventListener('keydown', onGlobalEscape, { capture: true })
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onGlobalEscape)
+  window.removeEventListener('resize', syncViewportLayout)
+  window.removeEventListener('keydown', onGlobalEscape, { capture: true })
 })
 </script>
 
 <template>
-  <div class="workspace">
-    <ChatSidebar
-      :chats="filteredChats"
-      :selected-chat-i-d="selectedChatID"
-      :current-user-id="currentUser?.id || ''"
-      :current-username="currentUser?.username || ''"
-      :current-user-display-name="currentUserDisplayName"
-      :current-user-avatar-src="currentUserAvatarSrc"
-      :search="sidebarSearch"
-      :selected-filter-tab="selectedFilterTab"
-      :unread-all="unreadCounts.all"
-      :unread-direct="unreadCounts.direct"
-      :unread-group="unreadCounts.group"
-      :unread-by-chat-id="unreadByChatId"
-      :muted-chat-i-ds="mutedChatIDs"
-      :loading="loadingChats"
-      :searching-directory="searchingDirectory"
-      :directory-query="directoryQuery"
-      :directory-results="directoryResults"
-      :sidebar-panel="sidebarPanel"
-      :can-create-channel="canCreateChannel"
-      :show-group-channels-panel="showGroupChannelsPanel"
-      :group-title="channelPanelTitle"
-      :group-member-count="chatMembers.length"
-      :group-channels="visibleGroupChannels"
-      :selected-group-channel-i-d="selectedGroupChannelID"
-      :loading-group-channels="loadingGroupChannels"
-      @update:search="sidebarSearch = $event"
-      @update:selected-filter-tab="
-        (value) => {
-          setChatFilter(value === 0 ? 'all' : value === 1 ? 'direct' : 'group')
-        }
-      "
-      @select="selectChat"
-      @select-directory-chat="selectDirectoryChat"
-      @select-directory-user="(user) => openDirectChatWithUser(user.id)"
-      @open-settings="openSidebarSettings"
-      @close-settings="closeSidebarSettings"
-      @create-group="handleCreateGroup"
-      @create-channel="handleCreateChannel"
-      @close-group-channels="closeGroupChannelsPanel"
-      @select-group-channel="selectGroupChannel"
-      @create-group-channel="
-        (input: { title: string; channel_type: 'text' | 'voice' }) =>
-          handleCreateChannel({ title: input.title, channel_type: input.channel_type, onSuccess: () => undefined, onError: () => undefined })
-      "
-    />
+  <div class="workspace" :class="{ phone: isPhoneLayout, tablet: isTabletLayout, 'conv-open': mobileConversationOpen, 'info-open': infoOpen }">
+    <aside class="wsSidebar" :aria-hidden="isPhoneLayout && mobileConversationOpen">
+      <ChatSidebar
+        :chats="filteredChats"
+        :selected-chat-i-d="selectedChatID"
+        :current-user-id="currentUser?.id || ''"
+        :current-username="currentUser?.username || ''"
+        :current-user-display-name="currentUserDisplayName"
+        :current-user-avatar-src="currentUserAvatarSrc"
+        :search="sidebarSearch"
+        :selected-filter-tab="selectedFilterTab"
+        :unread-all="unreadCounts.all"
+        :unread-direct="unreadCounts.direct"
+        :unread-group="unreadCounts.group"
+        :unread-by-chat-id="unreadByChatId"
+        :muted-chat-i-ds="mutedChatIDs"
+        :loading="loadingChats"
+        :searching-directory="searchingDirectory"
+        :directory-query="directoryQuery"
+        :directory-results="directoryResults"
+        :sidebar-panel="sidebarPanel"
+        :can-create-channel="canCreateChannel"
+        :show-group-channels-panel="showGroupChannelsPanel"
+        :group-title="channelPanelTitle"
+        :group-member-count="chatMembers.length"
+        :group-channels="visibleGroupChannels"
+        :selected-group-channel-i-d="selectedGroupChannelID"
+        :loading-group-channels="loadingGroupChannels"
+        @update:search="sidebarSearch = $event"
+        @update:selected-filter-tab="
+          (value) => {
+            setChatFilter(value === 0 ? 'all' : value === 1 ? 'direct' : 'group')
+          }
+        "
+        @select="selectChat"
+        @select-directory-chat="selectDirectoryChat"
+        @select-directory-user="(user) => openDirectChatWithUser(user.id)"
+        @open-settings="openSidebarSettings"
+        @close-settings="closeSidebarSettings"
+        @create-group="handleCreateGroup"
+        @create-channel="handleCreateChannel"
+        @close-group-channels="handleCloseGroupChannels"
+        @select-group-channel="handleSelectGroupChannel"
+        @create-group-channel="
+          (input: { title: string; channel_type: 'text' | 'voice' }) =>
+            handleCreateChannel({ title: input.title, channel_type: input.channel_type, onSuccess: () => undefined, onError: () => undefined })
+        "
+      />
+    </aside>
 
     <section class="conversation">
       <ChatConversationHeader
@@ -437,13 +505,13 @@ onBeforeUnmount(() => {
         :avatar-src="normalizeAvatarSrc(peerProfile?.avatar_data_url || selectedChat?.avatar_data_url || '')"
         :search-open="messageSearchOpen"
         :search-value="messageSearch"
-        :show-back="inDiscussionMode"
+        :show-back="inDiscussionMode || mobileConversationOpen"
         @open-info="openInfo"
         @open-search="openMessageSearch"
         @close-search="closeMessageSearch"
         @update-search="messageSearch = $event"
         @open-menu="openChatMenu"
-        @back="closeDiscussion"
+        @back="handleConversationBack"
       />
 
       <transition name="convFade">
@@ -511,8 +579,8 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else-if="showChannelViewerBar" class="viewerActionBar">
-        <button type="button" class="viewerIconBtn" :aria-label="t(Boolean(selectedChatID && mutedChatIDs[selectedChatID]) ? 'chat.unmute' : 'chat.mute')" @click="toggleMuteSelectedChat">
-          <v-icon :icon="Boolean(selectedChatID && mutedChatIDs[selectedChatID]) ? 'mdi-bell-ring-outline' : 'mdi-bell-off-outline'" size="20" />
+        <button type="button" class="viewerIconBtn" :aria-label="t(Boolean(activeMessagesChatID && mutedChatIDs[activeMessagesChatID]) ? 'chat.unmute' : 'chat.mute')" @click="toggleMuteSelectedChat">
+          <v-icon :icon="Boolean(activeMessagesChatID && mutedChatIDs[activeMessagesChatID]) ? 'mdi-bell-ring-outline' : 'mdi-bell-off-outline'" size="20" />
         </button>
         <button
           type="button"
@@ -535,7 +603,7 @@ onBeforeUnmount(() => {
         :video-viewer="videoViewer"
         :selected-chat="selectedChat"
         :chat-menu-anchor="chatMenuAnchor"
-        :is-selected-chat-muted="Boolean(selectedChatID && mutedChatIDs[selectedChatID])"
+        :is-selected-chat-muted="Boolean(activeMessagesChatID && mutedChatIDs[activeMessagesChatID])"
         @close-photo-viewer="closePhotoViewer"
         @close-video-viewer="closeVideoViewer"
         @close-chat-menu="closeChatMenu"
@@ -584,11 +652,21 @@ onBeforeUnmount(() => {
 <style scoped>
 .workspace {
   display: grid;
-  grid-template-columns: 420px minmax(0, 1fr) auto;
+  --info-dock-width: 0px;
+  grid-template-columns: 420px minmax(0, 1fr) var(--info-dock-width);
+  transition: grid-template-columns 220ms ease;
   height: 100%;
   min-height: 0;
   overflow: hidden;
   background: var(--bg);
+}
+
+.workspace.info-open {
+  --info-dock-width: 370px;
+}
+
+.wsSidebar {
+  min-height: 0;
 }
 
 .workspace > * {
@@ -601,7 +679,7 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 0;
   min-width: 0;
-  background: linear-gradient(180deg, rgba(247, 249, 252, 0.7), rgba(238, 242, 247, 0.82));
+  background: var(--chat-wallpaper, linear-gradient(180deg, rgba(247, 249, 252, 0.7), rgba(238, 242, 247, 0.82)));
   overflow: hidden;
   position: relative;
 }
@@ -655,7 +733,7 @@ onBeforeUnmount(() => {
   padding: 0 24px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--surface);
   box-shadow: var(--shadow-soft);
   color: var(--text);
   font-size: 18px;
@@ -668,7 +746,7 @@ onBeforeUnmount(() => {
   height: 52px;
   border: 1px solid var(--border);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--surface);
   box-shadow: var(--shadow-soft);
   color: var(--text-soft);
   display: grid;
@@ -682,20 +760,90 @@ onBeforeUnmount(() => {
 }
 
 .infoDock {
-  width: 0;
+  width: 100%;
   overflow: hidden;
   background: var(--surface);
-  border-left: 1px solid var(--border);
-  transition: width 220ms ease;
+  border-left: 0;
 }
 
 .infoDock.open {
-  width: 370px;
+  border-left: 1px solid var(--border);
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1024px) {
+  .workspace {
+    grid-template-columns: 360px minmax(0, 1fr);
+  }
+  .infoDock {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 100%);
+    transform: translateX(100%);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 220ms ease, opacity 140ms ease;
+    z-index: 6;
+    border-left: 1px solid var(--border);
+  }
+  .workspace.info-open .infoDock {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (max-width: 720px) {
   .workspace {
     grid-template-columns: 1fr;
+    position: relative;
+  }
+
+  .wsSidebar,
+  .conversation {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transition: transform 220ms ease, opacity 140ms ease;
+    will-change: transform, opacity;
+  }
+
+  .wsSidebar {
+    transform: translateX(0);
+    opacity: 1;
+    z-index: 2;
+  }
+
+  .workspace.conv-open .wsSidebar {
+    transform: translateX(-8%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .conversation {
+    transform: translateX(100%);
+    opacity: 0;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .workspace.conv-open .conversation {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .infoDock {
+    inset: 0;
+    width: 100%;
+    border-left: 0;
+    transform: translateX(100%);
+  }
+
+  .workspace.info-open .infoDock {
+    transform: translateX(0);
   }
 }
 </style>

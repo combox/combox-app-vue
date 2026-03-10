@@ -6,6 +6,7 @@ import MessageBubble from './MessageBubble.vue'
 import ReactionEmojiPicker from './ReactionEmojiPicker.vue'
 import type { ViewMessage } from './chatTypes'
 import type { MessageStatus } from './chatWorkspace.types'
+import { getSharedMediaLazyQueue } from './mediaLazyQueue'
 
 const CHAT_SCROLL_STORAGE_KEY = 'combox.chat.scroll.v1'
 
@@ -65,12 +66,28 @@ const containerRef = ref<HTMLElement | null>(null)
 const isNearBottom = ref(true)
 const newMessagesBelowCount = ref(0)
 const lastMessageCount = ref(0)
+const highlightedMessageId = ref('')
+let highlightTimer: number | null = null
 const pendingRestoreChatID = ref(props.selectedChatID)
 const reactionPickerRef = ref<HTMLElement | null>(null)
 const reactionPickerX = ref(0)
 const reactionPickerY = ref(0)
 const scrollIndexByChat = ref(readSavedChatScroll())
 let scrollPersistTimer: number | null = null
+
+const mediaQueue = getSharedMediaLazyQueue()
+let scrollUnlockTimer: number | null = null
+let scrollRafPending = false
+let lastScrollContainer: HTMLElement | null = null
+
+function lockMediaDuringScroll() {
+  mediaQueue.lock()
+  if (scrollUnlockTimer) window.clearTimeout(scrollUnlockTimer)
+  scrollUnlockTimer = window.setTimeout(() => {
+    scrollUnlockTimer = null
+    mediaQueue.unlock()
+  }, 120)
+}
 
 function readSavedChatScroll(): Record<string, number> {
   try {
@@ -132,10 +149,50 @@ function emitMarkRead() {
 }
 
 function onScroll(event: Event) {
-  const container = event.currentTarget as HTMLElement
-  updateNearBottom(container)
-  emit('nearBottom', isNearBottom.value)
-  if (props.selectedChatID && !props.messageSearch) persistScrollPosition(props.selectedChatID, container.scrollTop)
+  lastScrollContainer = event.currentTarget as HTMLElement
+  if (scrollRafPending) return
+  scrollRafPending = true
+
+  window.requestAnimationFrame(() => {
+    scrollRafPending = false
+    const container = lastScrollContainer
+    if (!container) return
+
+    lockMediaDuringScroll()
+    updateNearBottom(container)
+    emit('nearBottom', isNearBottom.value)
+    if (props.selectedChatID && !props.messageSearch) persistScrollPosition(props.selectedChatID, container.scrollTop)
+  })
+}
+
+function safeCssEscape(value: string): string {
+  const v = (value || '').trim()
+  if (!v) return ''
+  // Prefer native CSS.escape when available.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const esc = (globalThis as any)?.CSS?.escape
+  if (typeof esc === 'function') return esc(v)
+  return v.replace(/["\\]/g, '\\$&')
+}
+
+async function jumpToMessage(messageIdRaw: string) {
+  const messageId = (messageIdRaw || '').trim()
+  if (!messageId) return
+  await nextTick()
+  const container = containerRef.value
+  if (!container) return
+  const selector = `[data-message-id="${safeCssEscape(messageId)}"]`
+  const el = container.querySelector<HTMLElement>(selector)
+  if (!el) return
+
+  if (highlightTimer) window.clearTimeout(highlightTimer)
+  highlightedMessageId.value = messageId
+  highlightTimer = window.setTimeout(() => {
+    highlightedMessageId.value = ''
+    highlightTimer = null
+  }, 1600)
+
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 function shouldShowSenderHeader(index: number): boolean {
@@ -241,7 +298,7 @@ watch(
   },
 )
 
-const handleBeforeUnload = () => {
+const handlePageHide = () => {
   const container = containerRef.value
   if (container && props.selectedChatID && !props.messageSearch) {
     persistScrollPosition(props.selectedChatID, container.scrollTop)
@@ -250,16 +307,24 @@ const handleBeforeUnload = () => {
 }
 
 onMounted(() => {
-  window.addEventListener('beforeunload', handleBeforeUnload)
+  // `beforeunload` disables BFCache. Use `pagehide` instead.
+  window.addEventListener('pagehide', handlePageHide)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('pagehide', handlePageHide)
   const container = containerRef.value
   if (container && props.selectedChatID && !props.messageSearch) {
     persistScrollPosition(props.selectedChatID, container.scrollTop)
   }
   flushScrollStorageNow()
+  if (highlightTimer) window.clearTimeout(highlightTimer)
+  highlightTimer = null
+  highlightedMessageId.value = ''
+  if (scrollUnlockTimer) window.clearTimeout(scrollUnlockTimer)
+  scrollUnlockTimer = null
+  mediaQueue.unlock()
+  lastScrollContainer = null
 })
 
 watch(
@@ -425,7 +490,11 @@ watch(
         v-for="(thread, index) in threadedMessages"
         :key="thread.post.raw.id"
         class="messageItem"
-        :class="{ postThread: Boolean(isPublicChannel) && !(thread.post.raw.reply_to_message_id || '').trim() }"
+        :data-message-id="thread.post.raw.id"
+        :class="{
+          postThread: Boolean(isPublicChannel) && !(thread.post.raw.reply_to_message_id || '').trim(),
+          highlight: highlightedMessageId === thread.post.raw.id,
+        }"
       >
         <MessageBubble
           :message="thread.post"
@@ -454,6 +523,7 @@ watch(
           @open-discussion="$emit('openDiscussion', $event)"
           @react="$emit('react', $event)"
           @open-context-menu="$emit('openContextMenu', $event)"
+          @jump-to-message="jumpToMessage"
         />
       </div>
     </div>
@@ -571,6 +641,19 @@ watch(
   transform: translateZ(0);
 }
 
+.messageItem.highlight {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 14px;
+  animation: highlightPulse 1600ms ease-out;
+}
+
+@keyframes highlightPulse {
+  0% { outline-color: rgba(0, 0, 0, 0); }
+  20% { outline-color: var(--accent); }
+  100% { outline-color: rgba(0, 0, 0, 0); }
+}
+
 .discussionStack {
   padding: 18px 18px 96px;
   display: grid;
@@ -589,8 +672,8 @@ watch(
   justify-self: center;
   padding: 6px 12px;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.08);
-  color: rgba(15, 23, 42, 0.72);
+  background: var(--surface-soft);
+  color: var(--text-soft);
   font-size: 12px;
   font-weight: 700;
 }
@@ -613,8 +696,8 @@ watch(
   justify-self: center;
   padding: 6px 12px;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.08);
-  color: rgba(15, 23, 42, 0.72);
+  background: var(--surface-soft);
+  color: var(--text-soft);
   font-size: 12px;
   font-weight: 700;
 }
@@ -662,7 +745,7 @@ watch(
   border: 0;
   padding: 0;
   background: transparent;
-  color: #3b82f6;
+  color: var(--accent);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
@@ -678,19 +761,19 @@ watch(
 .emptyTitle {
   font-size: 22px;
   font-weight: 700;
-  color: rgba(0, 0, 0, 0.88);
+  color: var(--text);
 }
 
 .emptySubtitle {
   margin-top: 6px;
   font-size: 14px;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--text-muted);
 }
 
 .scrollBtn {
   position: absolute;
   right: 24px;
-  bottom: 22px;
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px) + 72px);
   z-index: 4;
   width: 48px;
   height: 48px;
@@ -741,10 +824,10 @@ watch(
   margin-top: 8px;
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  background: #fff;
+  border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: 14px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
   overflow: hidden;
 }
 

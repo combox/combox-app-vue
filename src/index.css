@@ -1,9 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
-
 @font-face {
   font-family: 'NotoColorEmoji';
   src: url('/assets/fonts/NotoColorEmoji.ttf') format('truetype');
   font-display: swap;
+  /* Only pull the font when emoji codepoints are actually used on the page. */
+  unicode-range: U+200D, U+20E3, U+23CF, U+23E9-23FF, U+2190-21FF, U+24C2, U+25AA-25AB, U+25B6, U+25C0, U+25FB-25FE,
+    U+2600-27BF, U+2934-2935, U+2B00-2BFF, U+3030, U+303D, U+3297-3299, U+FE0F, U+1F000-1FAFF;
 }
 
 :root {
@@ -26,6 +27,32 @@
   --shadow-soft: 0 12px 28px rgba(15, 23, 42, 0.05);
   --radius-card: 22px;
   --radius-pill: 999px;
+  --chat-wallpaper:
+    radial-gradient(circle at 1px 1px, rgba(15, 23, 42, 0.12) 1px, rgba(0, 0, 0, 0) 1.6px) 0 0 / 18px 18px,
+    linear-gradient(180deg, rgba(245, 248, 253, 0.86), rgba(232, 239, 247, 0.92));
+  --app-bg:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.92), rgba(238, 242, 247, 0.95) 42%),
+    linear-gradient(180deg, #f5f7fb 0%, #edf1f6 100%);
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b0b0c;
+  --bg-elevated: #111113;
+  --surface: rgba(20, 20, 22, 0.92);
+  --surface-strong: #18181b;
+  --surface-soft: rgba(255, 255, 255, 0.06);
+  --surface-soft-hover: rgba(255, 255, 255, 0.09);
+  --surface-selected: rgba(74, 144, 217, 0.18);
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.10);
+  --text: rgba(248, 250, 252, 0.96);
+  --text-soft: rgba(248, 250, 252, 0.72);
+  --text-muted: rgba(248, 250, 252, 0.52);
+  --shadow-soft: 0 18px 36px rgba(0, 0, 0, 0.22);
+  --app-bg:
+    radial-gradient(circle at top left, rgba(36, 36, 44, 0.92), rgba(11, 11, 12, 0.95) 42%),
+    linear-gradient(180deg, #0b0b0c 0%, #050506 100%);
 }
 
 /* cyrillic */
@@ -101,11 +128,10 @@ body,
 }
 
 body {
-  font-family: 'Manrope', 'NotoColorEmoji', 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif, 'NotoColorEmoji',
+    'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
   color: var(--text);
-  background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.92), rgba(238, 242, 247, 0.95) 42%),
-    linear-gradient(180deg, #f5f7fb 0%, #edf1f6 100%);
+  background: var(--app-bg);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

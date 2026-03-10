@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { getAttachmentDownloadURL } from 'combox-api'
 import type { AuthUser, ChatInviteLink, ChatItem, ChatMemberProfile, LocalProfile } from 'combox-api'
 import { normalizeAvatarSrc } from './chatUtils'
@@ -7,6 +7,9 @@ import type { ViewMessage } from './chatTypes'
 import GroupEditPanel from './GroupEditPanel.vue'
 import ChannelPanel from './PublicChannelPanel.vue'
 import { useI18n } from '../../i18n/i18n'
+import { yieldToMain } from './yieldToMain'
+import { getSharedMediaLazyQueue } from './mediaLazyQueue'
+import { preloadAndDecodeImage } from './mediaPreload'
 
 const props = defineProps<{
   open: boolean
@@ -54,6 +57,27 @@ const { t } = useI18n()
 const activeTab = ref<'media' | 'files' | 'links' | 'members'>(props.selectedChat?.is_direct ? 'media' : 'members')
 const manageMembers = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
+const bottomSentinelRef = ref<HTMLElement | null>(null)
+const panelReady = ref(false)
+let panelReadyTimer: number | null = null
+let moreIO: IntersectionObserver | null = null
+
+// Must be initialized before any immediate watchers run (TDZ-safe).
+const mediaQueue = getSharedMediaLazyQueue()
+const mediaTileElById = new Map<string, HTMLElement>()
+const mediaTileCleanupById = new Map<string, () => void>()
+let mediaTileEpoch = 0
+let infoScrollEl: HTMLElement | null = null
+let infoScrollUnlockTimer: number | null = null
+
+function onInfoScroll() {
+  mediaQueue.lock()
+  if (infoScrollUnlockTimer) window.clearTimeout(infoScrollUnlockTimer)
+  infoScrollUnlockTimer = window.setTimeout(() => {
+    infoScrollUnlockTimer = null
+    mediaQueue.unlock()
+  }, 140)
+}
 const activeProfile = computed(() => props.focusedUserProfile || props.peerProfile)
 const isUserInfoMode = computed(() => Boolean(props.focusedUserProfile?.id))
 const isGroupMode = computed(() => Boolean(props.selectedChat && !props.selectedChat.is_direct && !isUserInfoMode.value))
@@ -63,6 +87,51 @@ watch(
   () => {
     activeTab.value = props.selectedChat?.is_direct ? 'media' : 'members'
     manageMembers.value = false
+  },
+)
+
+watch(
+  () => props.open,
+  (open) => {
+    if (panelReadyTimer) {
+      window.clearTimeout(panelReadyTimer)
+      panelReadyTimer = null
+    }
+
+    if (!open) {
+      panelReady.value = false
+      cleanupMediaTileObservers()
+      return
+    }
+
+    // Let the resize animation start first, then mount/heavy-work.
+    panelReady.value = false
+    // Don't decode/download while the panel is resizing.
+    mediaQueue.lockFor(260)
+    panelReadyTimer = window.setTimeout(() => {
+      panelReady.value = true
+    }, 220)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => panelReady.value,
+  (ready) => {
+    if (!ready) return
+    if (!props.open) return
+
+    if (pendingMediaFileRebuild && (activeTab.value === 'media' || activeTab.value === 'files')) {
+      pendingMediaFileRebuild = false
+      void rebuildDerivedLists(props.messages)
+    }
+
+    if (activeTab.value === 'links') {
+      void rebuildLinks(props.messages)
+    }
+
+    resetVisible(activeTab.value)
+    void nextTick(() => attachMoreObserver())
   },
 )
 
@@ -95,22 +164,297 @@ const birthday = computed(() => {
   if (!raw) return '-'
   const parsed = new Date(raw)
   if (Number.isNaN(parsed.getTime())) return raw
-  return parsed.toLocaleDateString()
+  return parsed.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
 })
-const memberItems = computed(() =>
-  props.chatMembers.map((member) => {
-    const profile = member.profile
-    const fullName = `${(profile?.first_name || '').trim()} ${(profile?.last_name || '').trim()}`.trim()
-    return {
-      id: member.user_id,
-      role: (member.role || 'member').trim() || 'member',
-      joinedAt: member.joined_at || '',
-      username: profile?.username || '',
-      displayName: fullName || profile?.username || member.user_id,
-      avatarSrc: normalizeAvatarSrc(profile?.avatar_data_url || ''),
-    }
-  }),
+const memberItems = ref<
+  Array<{ id: string; role: string; joinedAt: string; username: string; displayName: string; avatarSrc: string }>
+>([])
+const mediaItems = ref<
+  Array<{ id: string; src: string; fullSrc: string; kind: 'image' | 'video'; alt: string; filename: string }>
+>([])
+const fileItems = ref<Array<{ id: string; name: string; kind: string; url?: string }>>([])
+const linkItems = ref<string[]>([])
+
+const visibleMemberCount = ref(0)
+const visibleMediaCount = ref(0)
+const visibleFileCount = ref(0)
+const visibleLinkCount = ref(0)
+
+let rebuildToken = 0
+let linkToken = 0
+let pendingMediaFileRebuild = false
+
+const mediaThumbLoaded = reactive<Record<string, boolean>>({})
+
+watch(
+  () => props.chatMembers,
+  (members) => {
+    memberItems.value = members.map((member) => {
+      const profile = member.profile
+      const fullName = `${(profile?.first_name || '').trim()} ${(profile?.last_name || '').trim()}`.trim()
+      return {
+        id: member.user_id,
+        role: (member.role || 'member').trim() || 'member',
+        joinedAt: member.joined_at || '',
+        username: profile?.username || '',
+        displayName: fullName || profile?.username || member.user_id,
+        avatarSrc: normalizeAvatarSrc(profile?.avatar_data_url || ''),
+      }
+    })
+  },
+  { immediate: true },
 )
+
+function collectMediaAndFiles(messages: ViewMessage[]) {
+  const media: Array<{ id: string; src: string; fullSrc: string; kind: 'image' | 'video'; alt: string; filename: string }> = []
+  const files: Array<{ id: string; name: string; kind: string; url?: string }> = []
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    for (const attachment of message.attachments) {
+      if (attachment.kind === 'image' || attachment.kind === 'video') {
+        const src = attachment.previewUrl || attachment.url
+        if (!src) continue
+        media.push({
+          id: attachment.id,
+          src,
+          fullSrc: attachment.url || attachment.previewUrl,
+          kind: attachment.kind,
+          alt: attachment.filename || attachment.kind,
+          filename: attachment.filename || '',
+        })
+        continue
+      }
+      files.push({
+        id: attachment.id,
+        name: attachment.filename || 'file',
+        kind: attachment.kind || 'file',
+        url: attachment.url,
+      })
+    }
+    if (media.length >= 160 && files.length >= 160) break
+  }
+
+  mediaItems.value = media.slice(0, 120)
+  fileItems.value = files.slice(0, 120)
+
+  // Reset loaded flags for new collection.
+  for (const key of Object.keys(mediaThumbLoaded)) delete mediaThumbLoaded[key]
+  cleanupMediaTileObservers()
+}
+
+async function rebuildDerivedLists(messages: ViewMessage[]) {
+  const my = ++rebuildToken
+
+  // Yield once so the open/resize animation can start first.
+  await yieldToMain()
+  if (my !== rebuildToken) return
+
+  collectMediaAndFiles(messages)
+}
+
+watch(
+  () => [props.open, activeTab.value, props.messages] as const,
+  ([open, tab, messages]) => {
+    // Media and Files are the heavy tabs because of thumbnails. Don't even prepare their lists
+    // unless the user actually opens the tab.
+    if (!open || !panelReady.value || (tab !== 'media' && tab !== 'files')) {
+      pendingMediaFileRebuild = true
+      return
+    }
+    pendingMediaFileRebuild = false
+    void rebuildDerivedLists(messages)
+  },
+  { immediate: true },
+)
+
+async function rebuildLinks(messages: ViewMessage[]) {
+  const my = ++linkToken
+  await yieldToMain()
+  if (my !== linkToken) return
+
+  const seen = new Set<string>()
+  const found: string[] = []
+  const re = /\b((?:https?:\/\/|www\.)[^\s<>"'`]+)\b/gi
+
+  // Chunk to avoid long tasks.
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    for (const match of (message.text || '').matchAll(re)) {
+      const raw = (match[1] || '').trim()
+      const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+      if (!url || seen.has(url)) continue
+      seen.add(url)
+      found.push(url)
+      if (found.length >= 200) break
+    }
+    if (found.length >= 200) break
+    if (i % 40 === 0) {
+      await yieldToMain()
+      if (my !== linkToken) return
+    }
+  }
+
+  linkItems.value = found
+}
+
+watch(
+  () => [props.open, activeTab.value, props.messages] as const,
+  ([open, tab, messages]) => {
+    if (!open || !panelReady.value || tab !== 'links') return
+    void rebuildLinks(messages)
+  },
+  { immediate: true },
+)
+
+function growVisible(tab: 'members' | 'media' | 'files' | 'links') {
+  const step = 24
+  if (tab === 'members') visibleMemberCount.value = Math.min(memberItems.value.length, visibleMemberCount.value + step)
+  if (tab === 'media') visibleMediaCount.value = Math.min(mediaItems.value.length, visibleMediaCount.value + step)
+  if (tab === 'files') visibleFileCount.value = Math.min(fileItems.value.length, visibleFileCount.value + step)
+  if (tab === 'links') visibleLinkCount.value = Math.min(linkItems.value.length, visibleLinkCount.value + step)
+}
+
+function resetVisible(tab: 'members' | 'media' | 'files' | 'links') {
+  const step = 24
+  if (tab === 'members') visibleMemberCount.value = Math.min(step, memberItems.value.length)
+  if (tab === 'media') visibleMediaCount.value = Math.min(step, mediaItems.value.length)
+  if (tab === 'files') visibleFileCount.value = Math.min(step, fileItems.value.length)
+  if (tab === 'links') visibleLinkCount.value = Math.min(step, linkItems.value.length)
+}
+
+function attachMoreObserver() {
+  if (moreIO) {
+    moreIO.disconnect()
+    moreIO = null
+  }
+  if (!props.open || !panelReady.value) return
+  if (!rootRef.value || !bottomSentinelRef.value) return
+
+  moreIO = new IntersectionObserver(
+    (entries) => {
+      const entry = entries[0]
+      if (!entry?.isIntersecting) return
+      growVisible(activeTab.value)
+    },
+    { root: rootRef.value, rootMargin: '700px 0px', threshold: 0.01 },
+  )
+
+  moreIO.observe(bottomSentinelRef.value)
+}
+
+onMounted(() => {
+  attachMoreObserver()
+
+  // Pause media decode/loading while the panel is actively scrolling (tweb-like).
+  infoScrollEl = rootRef.value
+  infoScrollEl?.addEventListener('scroll', onInfoScroll, { passive: true })
+})
+
+onBeforeUnmount(() => {
+  if (panelReadyTimer) window.clearTimeout(panelReadyTimer)
+  panelReadyTimer = null
+  if (moreIO) moreIO.disconnect()
+  moreIO = null
+  if (infoScrollEl) infoScrollEl.removeEventListener('scroll', onInfoScroll)
+  infoScrollEl = null
+  if (infoScrollUnlockTimer) window.clearTimeout(infoScrollUnlockTimer)
+  infoScrollUnlockTimer = null
+  mediaQueue.unlock()
+  cleanupMediaTileObservers()
+})
+
+watch(
+  () => [props.open, activeTab.value] as const,
+  ([open, tab]) => {
+    if (!open) return
+
+    if (pendingMediaFileRebuild && (tab === 'media' || tab === 'files')) {
+      pendingMediaFileRebuild = false
+      void rebuildDerivedLists(props.messages)
+    }
+
+    resetVisible(tab)
+    void nextTick(() => attachMoreObserver())
+  },
+  { immediate: true },
+)
+
+function onMediaThumbLoad(id: string) {
+  mediaThumbLoaded[id] = true
+}
+
+function cleanupMediaTileObservers() {
+  mediaTileEpoch += 1
+  for (const cleanup of mediaTileCleanupById.values()) {
+    try {
+      cleanup()
+    } catch {
+      // ignore
+    }
+  }
+  mediaTileCleanupById.clear()
+  mediaTileElById.clear()
+}
+
+function setMediaTileRef(id: string, el: Element | null) {
+  const next = (el as HTMLElement | null) || null
+  const prev = mediaTileElById.get(id)
+  if (prev && prev === next) return
+
+  const prevCleanup = mediaTileCleanupById.get(id)
+  if (prevCleanup) {
+    prevCleanup()
+    mediaTileCleanupById.delete(id)
+  }
+
+  if (!next) {
+    mediaTileElById.delete(id)
+    return
+  }
+
+  mediaTileElById.set(id, next)
+  const item = mediaItems.value.find((x) => x.id === id)
+  if (!item) return
+
+  const epoch = mediaTileEpoch
+  const cleanup = mediaQueue.observe({
+    target: next,
+    load: async () => {
+      if (mediaThumbLoaded[id]) return
+      await preloadAndDecodeImage(item.src)
+      if (epoch !== mediaTileEpoch) return
+      if (!props.open || activeTab.value !== 'media') return
+      if (!next.isConnected) return
+      window.requestAnimationFrame(() => {
+        if (epoch !== mediaTileEpoch) return
+        mediaThumbLoaded[id] = true
+      })
+    },
+  })
+
+  mediaTileCleanupById.set(id, cleanup)
+}
+
+// Avoid function-refs in v-for (can create unstable pending ref jobs). Use a directive instead.
+const vMediaTile = {
+  mounted(el: Element, binding: { value: string }) {
+    const id = (binding.value || '').trim()
+    if (!id) return
+    setMediaTileRef(id, el)
+  },
+  updated(el: Element, binding: { value: string; oldValue?: string }) {
+    const prev = (binding.oldValue || '').trim()
+    const next = (binding.value || '').trim()
+    if (prev && prev !== next) setMediaTileRef(prev, null)
+    if (next) setMediaTileRef(next, el)
+  },
+  unmounted(_el: Element, binding: { value: string }) {
+    const id = (binding.value || '').trim()
+    if (!id) return
+    setMediaTileRef(id, null)
+  },
+}
 const currentGroupRole = computed(() => {
   if (isStandaloneChannel.value) return ((props.selectedChat?.viewer_role || '').trim().toLowerCase())
   if (props.selectedChat?.is_direct) return ''
@@ -129,54 +473,6 @@ const publicSubscriberCount = computed(() => Number(props.selectedChat?.subscrib
 const isSubscribedToChannel = computed(() => {
   if (!isStandaloneChannel.value) return false
   return ['owner', 'admin', 'subscriber'].includes(currentGroupRole.value)
-})
-const mediaItems = computed(() =>
-  props.messages
-    .flatMap((message) =>
-      message.attachments
-        .filter((attachment) => attachment.kind === 'image' || attachment.kind === 'video')
-        .map((attachment) => ({
-          id: attachment.id,
-          src: attachment.previewUrl || attachment.url,
-          fullSrc: attachment.url || attachment.previewUrl,
-          kind: attachment.kind,
-          alt: attachment.filename || attachment.kind,
-          filename: attachment.filename || '',
-        })),
-    )
-    .filter((item) => Boolean(item.src))
-    .slice(-120)
-    .reverse(),
-)
-const fileItems = computed(() =>
-  props.messages
-    .flatMap((message) =>
-      message.attachments
-        .filter((attachment) => attachment.kind !== 'image' && attachment.kind !== 'video')
-        .map((attachment) => ({
-          id: attachment.id,
-          name: attachment.filename || 'file',
-          kind: attachment.kind || 'file',
-          url: attachment.url,
-        })),
-    )
-    .slice(-120)
-    .reverse(),
-)
-const linkItems = computed(() => {
-  const seen = new Set<string>()
-  const found: string[] = []
-  const re = /\b((?:https?:\/\/|www\.)[^\s<>"'`]+)\b/gi
-  for (const message of props.messages) {
-    for (const match of (message.text || '').matchAll(re)) {
-      const raw = (match[1] || '').trim()
-      const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
-      if (!url || seen.has(url)) continue
-      seen.add(url)
-      found.push(url)
-    }
-  }
-  return found.slice(-200).reverse()
 })
 
 async function downloadAttachment(attachmentID: string, filename: string, fallbackURL?: string) {
@@ -316,6 +612,7 @@ function openGroupSettings() {
     </div>
 
     <div class="ipBody">
+      <template v-if="panelReady">
       <div v-if="activeTab === 'members'" class="ipList">
         <div v-if="isStandaloneChannel" class="ipChannelSummary">
           <div class="ipChannelCount">
@@ -332,7 +629,7 @@ function openGroupSettings() {
           </button>
         </div>
         <template v-if="canViewChannelMembers && memberItems.length > 0">
-          <div v-for="item in memberItems" :key="item.id" class="ipMemberItem">
+          <div v-for="item in memberItems.slice(0, visibleMemberCount)" :key="item.id" class="ipMemberItem">
             <div class="ipMemberAvatar">
               <img v-if="item.avatarSrc" :src="item.avatarSrc" alt="" class="ipMemberAvatarImg" />
               <span v-else class="ipMemberAvatarFallback">{{ item.displayName.slice(0, 1).toUpperCase() }}</span>
@@ -351,13 +648,28 @@ function openGroupSettings() {
 
       <div v-else-if="activeTab === 'media'" class="ipMediaGrid">
         <template v-if="mediaItems.length > 0">
-          <div v-for="item in mediaItems" :key="item.id" class="ipMediaTile">
+          <div
+            v-for="item in mediaItems.slice(0, visibleMediaCount)"
+            :key="item.id"
+            class="ipMediaTile"
+            :class="{ loaded: Boolean(mediaThumbLoaded[item.id]) }"
+            v-media-tile="item.id"
+          >
             <button
               type="button"
               class="ipMediaOpen"
               @click="item.kind === 'video' ? emit('openVideo', { attachmentID: item.id, src: item.fullSrc, poster: item.src, filename: item.filename }) : emit('openImage', item.fullSrc)"
             >
-              <img :src="item.src" :alt="item.alt" class="ipMediaImg" />
+              <div class="ipMediaSkeleton" aria-hidden="true" />
+              <img
+                v-if="Boolean(mediaThumbLoaded[item.id])"
+                :src="item.src"
+                :alt="item.alt"
+                class="ipMediaImg"
+                loading="lazy"
+                decoding="async"
+                @load="onMediaThumbLoad(item.id)"
+              />
             </button>
             <div v-if="item.kind === 'video'" class="ipVideoFlag">{{ t('chat.video_label') }}</div>
           </div>
@@ -367,7 +679,7 @@ function openGroupSettings() {
 
       <div v-else-if="activeTab === 'files'" class="ipList">
         <template v-if="fileItems.length > 0">
-          <button v-for="item in fileItems" :key="item.id" type="button" class="ipFileItem" @click="downloadAttachment(item.id, item.name, item.url)">
+          <button v-for="item in fileItems.slice(0, visibleFileCount)" :key="item.id" type="button" class="ipFileItem" @click="downloadAttachment(item.id, item.name, item.url)">
             <div class="ipFileName">{{ item.name }}</div>
             <div class="ipFileKind">{{ item.kind }}</div>
           </button>
@@ -377,10 +689,20 @@ function openGroupSettings() {
 
       <div v-else class="ipList">
         <template v-if="linkItems.length > 0">
-          <a v-for="item in linkItems" :key="item" :href="item" target="_blank" rel="noreferrer" class="ipLinkItem">{{ item }}</a>
+          <a v-for="item in linkItems.slice(0, visibleLinkCount)" :key="item" :href="item" target="_blank" rel="noreferrer" class="ipLinkItem">{{ item }}</a>
         </template>
         <div v-else class="ipEmpty">{{ t('chat.no_links') }}</div>
       </div>
+      <div ref="bottomSentinelRef" class="ipBottomSentinel" aria-hidden="true" />
+      </template>
+      <template v-else>
+        <div class="ipPanelSkeleton" aria-hidden="true">
+          <div class="ipSkLine ipSkLine--lg" />
+          <div class="ipSkLine" />
+          <div class="ipSkLine" />
+          <div class="ipSkLine ipSkLine--sm" />
+        </div>
+      </template>
     </div>
     </template>
     </template>
@@ -394,9 +716,8 @@ function openGroupSettings() {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  border-left: 1px solid rgba(15, 23, 42, 0.08);
-  background:
-    linear-gradient(180deg, rgba(246, 248, 252, 0.96), rgba(255, 255, 255, 0.98));
+  border-left: 1px solid var(--border);
+  background: var(--surface-strong);
   height: 100%;
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -414,7 +735,7 @@ function openGroupSettings() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  border-bottom: 1px solid var(--border);
 }
 
 .ipHeaderLeft {
@@ -440,16 +761,16 @@ function openGroupSettings() {
   height: 32px;
   border: 0;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.14);
-  color: rgba(15, 23, 42, 0.72);
+  background: var(--surface-soft);
+  color: var(--text-soft);
   display: grid;
   place-items: center;
   cursor: pointer;
 }
 
 .ipIconBtn:hover {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
+  background: var(--surface-soft-hover);
+  color: var(--text);
 }
 
 .ipHero {
@@ -477,7 +798,7 @@ function openGroupSettings() {
 .ipHeroAvatarFallback {
   display: grid;
   place-items: center;
-  background: #7aa3cc;
+  background: var(--avatar-fallback);
   color: #fff;
   font-size: 34px;
   font-weight: 700;
@@ -488,14 +809,14 @@ function openGroupSettings() {
   font-size: 17px;
   font-weight: 800;
   text-align: center;
-  color: rgba(0, 0, 0, 0.88);
+  color: var(--text);
   line-height: 1.15;
   max-width: 260px;
 }
 
 .ipSubtitle {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--text-muted);
   line-height: 1.15;
 }
 
@@ -512,18 +833,18 @@ function openGroupSettings() {
 
 .ipMetaIcon {
   margin-top: 2px;
-  color: rgba(0, 0, 0, 0.62);
+  color: var(--text-muted);
 }
 
 .ipMetaValue {
   font-size: 16px;
   font-weight: 700;
-  color: rgba(0, 0, 0, 0.88);
+  color: var(--text);
 }
 
 .ipMetaLabel {
   font-size: 13px;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--text-muted);
 }
 
 .ipTabs {
@@ -531,7 +852,7 @@ function openGroupSettings() {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  border-top: 1px solid var(--border);
 }
 
 .ipTab {
@@ -540,20 +861,47 @@ function openGroupSettings() {
   border: 0;
   border-radius: 999px;
   background: transparent;
-  color: rgba(15, 23, 42, 0.6);
+  color: var(--text-muted);
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
 }
 
 .ipTab.active {
-  color: #1d4ed8;
-  background: rgba(59, 130, 246, 0.12);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
 }
 
 .ipBody {
   padding: 14px 16px 20px;
 }
+
+.ipBottomSentinel {
+  height: 1px;
+}
+
+.ipPanelSkeleton {
+  padding: 8px 2px 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.ipSkLine {
+  height: 12px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, rgba(15, 23, 42, 0.06), rgba(148, 163, 184, 0.14), rgba(15, 23, 42, 0.06));
+  background-size: 220% 100%;
+  animation: ipShimmer 900ms ease-in-out infinite;
+}
+
+html[data-theme='dark'] .ipSkLine {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05));
+}
+
+.ipSkLine--lg { height: 16px; width: 72%; }
+.ipSkLine--sm { width: 44%; }
 
 .ipMediaGrid {
   display: grid;
@@ -565,8 +913,12 @@ function openGroupSettings() {
   position: relative;
   aspect-ratio: 1 / 1;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.08);
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  content-visibility: auto;
+  contain-intrinsic-size: 120px;
+  contain: layout paint style;
 }
 
 .ipMediaOpen {
@@ -576,6 +928,21 @@ function openGroupSettings() {
   padding: 0;
   background: transparent;
   cursor: pointer;
+  position: relative;
+}
+
+.ipMediaSkeleton {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(15, 23, 42, 0.06), rgba(148, 163, 184, 0.12), rgba(15, 23, 42, 0.06));
+  background-size: 220% 100%;
+  animation: ipShimmer 900ms ease-in-out infinite;
+}
+
+html[data-theme='dark'] .ipMediaSkeleton {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05));
 }
 
 .ipMediaImg {
@@ -583,6 +950,22 @@ function openGroupSettings() {
   height: 100%;
   object-fit: cover;
   display: block;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.ipMediaTile.loaded .ipMediaImg {
+  opacity: 1;
+}
+
+.ipMediaTile.loaded .ipMediaSkeleton {
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes ipShimmer {
+  0% { background-position: 0% 0; }
+  100% { background-position: 200% 0; }
 }
 
 .ipVideoFlag {
@@ -616,21 +999,21 @@ function openGroupSettings() {
   font-size: 28px;
   line-height: 1;
   font-weight: 800;
-  color: rgba(0, 0, 0, 0.88);
+  color: var(--text);
 }
 
 .ipChannelCountLabel {
   font-size: 13px;
-  color: rgba(0, 0, 0, 0.56);
+  color: var(--text-muted);
 }
 
 .ipSubscribeBtn {
   min-height: 40px;
   padding: 0 16px;
-  border: 1px solid rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(74, 144, 217, 0.22);
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.1);
-  color: #1d4ed8;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
@@ -688,8 +1071,9 @@ function openGroupSettings() {
 .ipManageResult {
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  background: #fff;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 14px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -697,14 +1081,18 @@ function openGroupSettings() {
   cursor: pointer;
 }
 
+.ipManageResult:hover {
+  background: var(--surface-soft-hover);
+}
+
 .ipMemberItem {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--border);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
 
@@ -713,7 +1101,7 @@ function openGroupSettings() {
   height: 38px;
   border-radius: 50%;
   overflow: hidden;
-  background: #7aa3cc;
+  background: var(--avatar-fallback);
   display: grid;
   place-items: center;
   font-size: 14px;
@@ -742,7 +1130,7 @@ function openGroupSettings() {
 .ipMemberName {
   font-size: 14px;
   font-weight: 700;
-  color: rgba(0, 0, 0, 0.88);
+  color: var(--text);
 }
 
 .ipMemberMeta {
@@ -750,7 +1138,7 @@ function openGroupSettings() {
   gap: 8px;
   flex-wrap: wrap;
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--text-muted);
 }
 
 
@@ -766,15 +1154,17 @@ function openGroupSettings() {
   min-width: 56px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  background: #fff;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text);
+  border-radius: 999px;
   font-size: 12px;
   cursor: pointer;
 }
 
 .ipDangerBtn {
-  color: #c62828;
-  border-color: rgba(198, 40, 40, 0.24);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.24);
 }
 
 .ipFileItem,
@@ -789,38 +1179,46 @@ function openGroupSettings() {
   text-align: left;
   padding: 12px 14px;
   border: 0;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--border);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface);
   cursor: pointer;
+}
+
+.ipFileItem:hover {
+  background: var(--surface-soft-hover);
 }
 
 .ipFileName {
   font-size: 13px;
   font-weight: 700;
-  color: rgba(0, 0, 0, 0.84);
+  color: var(--text);
 }
 
 .ipFileKind {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--text-muted);
 }
 
 .ipLinkItem {
   display: block;
   padding: 12px 14px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--border);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface);
   font-size: 13px;
-  color: #2563eb;
+  color: var(--accent);
   text-decoration: none;
   word-break: break-all;
+}
+
+.ipLinkItem:hover {
+  background: var(--surface-soft-hover);
 }
 
 .ipEmpty {
   padding: 4px 0;
   font-size: 13px;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--text-muted);
 }
 </style>

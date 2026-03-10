@@ -2,7 +2,7 @@ import { buildWsUrlWithFreshToken } from 'combox-api'
 
 type StatusPayload = { status: string; userID: string; at?: string }
 type EventMeta = { type: string; chatID: string; messageID: string; id?: string }
-type MessageCreatedPayload = { chatID: string; senderUserID: string; messageID: string }
+type MessageCreatedPayload = { chatID: string; senderUserID: string; messageID: string; muted?: boolean }
 type PresencePayload = { userID: string; online: boolean; lastSeen?: string; lastSeenVisible?: boolean }
 
 type PendingRequest = {
@@ -268,7 +268,8 @@ export function useChatRealtime(args: UseChatRealtimeArgs) {
         if (kind === 'message.created') {
           const inner = root?.payload
           const created = readMessageCreated(inner)
-          if (created.chatID) args.onNotificationMessageCreated(created)
+          const muted = Boolean(root && (root as Record<string, unknown>).muted === true)
+          if (created.chatID) args.onNotificationMessageCreated({ ...created, muted })
         }
       }
       if (type === 'presence.update' && args.onPresenceUpdate) {

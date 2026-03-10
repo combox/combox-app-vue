@@ -23,6 +23,13 @@ type SetupWorkspaceComputedInput = {
 }
 
 export function setupWorkspaceComputed(input: SetupWorkspaceComputedInput) {
+  const isGroupChannel = (chat: ChatItem): boolean => {
+    const kind = (chat.kind || '').trim()
+    if (kind !== 'channel') return false
+    // Group "topics"/channels have a parent group id; they should not appear in the main chat list.
+    return Boolean((chat.parent_chat_id || '').trim())
+  }
+
   const selectedChat = computed(() => input.chats.value.find((chat) => chat.id === input.selectedChatID.value) || input.invitePreviewChat.value || null)
   const directPeerId = computed(() => (selectedChat.value?.is_direct ? (selectedChat.value?.peer_user_id || '').trim() : ''))
   const directoryQuery = computed(() => {
@@ -34,7 +41,7 @@ export function setupWorkspaceComputed(input: SetupWorkspaceComputedInput) {
   const filteredChats = computed(() => {
     const q = input.sidebarSearch.value.trim().toLowerCase()
     const byType = input.chats.value
-      .filter((chat) => (chat.kind || '').trim() !== 'channel')
+      .filter((chat) => !isGroupChannel(chat))
       .filter((chat) => {
         if (input.chatFilter.value === 'all') return true
         if (input.chatFilter.value === 'direct') return chat.is_direct
@@ -47,7 +54,7 @@ export function setupWorkspaceComputed(input: SetupWorkspaceComputedInput) {
     let all = 0
     let direct = 0
     let group = 0
-    for (const chat of input.chats.value.filter((item) => (item.kind || '').trim() !== 'channel')) {
+    for (const chat of input.chats.value.filter((item) => !isGroupChannel(item))) {
       const unread = Math.max(0, input.unreadByChatId.value[chat.id] || 0)
       if (!unread || input.mutedChatIDs.value[chat.id]) continue
       all += 1

@@ -50,6 +50,23 @@ export function setupWorkspaceLoaders(input: WorkspaceLoadersInput) {
         result = await listChats()
       }
 
+      // Some WS implementations may omit standalone channels. Merge with REST to avoid hiding them in the UI.
+      try {
+        const fromRest = await listChats()
+        if (Array.isArray(fromRest) && fromRest.length > 0) {
+          const byId = new Map<string, ChatItem>()
+          for (const item of result) byId.set((item.id || '').trim(), item)
+          for (const item of fromRest) {
+            const id = (item.id || '').trim()
+            if (!id) continue
+            if (!byId.has(id)) byId.set(id, item)
+          }
+          result = Array.from(byId.values())
+        }
+      } catch {
+        // keep WS/fallback result
+      }
+
       input.chats.value = result
       writeJSON(CHATS_CACHE_KEY, input.chats.value)
 

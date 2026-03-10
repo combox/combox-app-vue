@@ -105,9 +105,11 @@ onBeforeUnmount(() => {
   position: fixed;
   min-width: 240px;
   max-width: min(240px, calc(100vw - 16px));
-  background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+  background: var(--surface);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.22);
   overflow: hidden;
 }
 
@@ -124,16 +126,16 @@ onBeforeUnmount(() => {
   height: 30px;
   display: grid;
   place-items: center;
-  border-radius: 0;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  background: #fff;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
   cursor: pointer;
   user-select: none;
 }
 
 .cmQuick:hover,
 .cmItem:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--surface-soft-hover);
 }
 
 .cmEmoji {
@@ -143,27 +145,27 @@ onBeforeUnmount(() => {
 
 .cmMore {
   font-size: 14px;
-  color: rgba(0, 0, 0, 0.6);
+  color: var(--text-muted);
 }
 
 .cmDivider {
   height: 1px;
-  background: rgba(0, 0, 0, 0.12);
+  background: var(--border);
 }
 
 .cmItem {
   width: 100%;
   min-height: 40px;
   border: 0;
-  background: #fff;
+  background: transparent;
   text-align: left;
   padding: 8px 14px;
   font-size: 14px;
-  color: rgba(0, 0, 0, 0.88);
+  color: var(--text);
   cursor: pointer;
 }
 
 .cmItem.danger {
-  color: #d32f2f;
+  color: #ef4444;
 }
 </style>

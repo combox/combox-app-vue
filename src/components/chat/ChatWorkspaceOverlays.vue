@@ -116,7 +116,8 @@ const chatMenuStyle = computed(() => {
   padding: 6px;
   border: 1px solid var(--border);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.98);
+  background: var(--surface);
+  backdrop-filter: blur(16px);
   box-shadow: var(--shadow-soft);
 }
 
@@ -163,10 +164,10 @@ const chatMenuStyle = computed(() => {
 }
 
 .chatMenuItemDanger {
-  color: #d32f2f;
+  color: #ef4444;
 }
 
 .chatMenuItemDanger:hover {
-  background: rgba(211, 47, 47, 0.08);
+  background: rgba(239, 68, 68, 0.14);
 }
 </style>

@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from '../../i18n/i18n'
 import {
   getAttachment,
@@ -39,6 +39,7 @@ import { setupWorkspaceMeta } from './chatWorkspace.meta'
 import { setupWorkspaceNavigation } from './chatWorkspace.navigation'
 import { setupWorkspacePresence } from './chatWorkspace.presence'
 import { setupWorkspaceRuntimeHelpers } from './chatWorkspace.runtimeHelpers'
+import { tryPlayMessageSound, tryShowDesktopNotification } from './chatWorkspace.notifications'
 import { readJSON, writeJSON } from './chatWorkspace.storage'
 import { persistStatusToChatCache, persistStatusToGlobalCache } from './chatWorkspace.status'
 import { setupWorkspaceWatchers } from './chatWorkspace.watchers'
@@ -187,6 +188,19 @@ export function useChatWorkspace() {
     unreadByChatId,
   })
 
+  watchEffect(() => {
+    const base = 'ComBox'
+    const activeID = activeMessagesChatID.value.trim()
+    if (typeof document === 'undefined') return
+    if (!activeID) {
+      document.title = base
+      return
+    }
+    const chat = chats.value.find((item) => (item.id || '').trim() === activeID)
+    const name = (chat?.title || '').trim()
+    document.title = name ? `${base} | ${name}` : base
+  })
+
   const {
     patchChatLocally,
     refreshChatMembers,
@@ -302,11 +316,32 @@ export function useChatWorkspace() {
       if (groupID) window.setTimeout(() => { void loadGroupChannels(groupID) }, 220)
     },
     onNotificationMessageCreated: (payload) => {
+      const chatID = (payload.chatID || '').trim()
+      const messageID = (payload.messageID || '').trim()
+      const alreadySeen = Boolean(messageID && processedIncomingMessageIDs.value.has(messageID))
+
       applyUnreadFromIncoming(payload.chatID, payload.senderUserID, payload.messageID)
       updateGroupChannelPreview(payload.chatID, readEventPreview(payload as Record<string, unknown>), readEventCreatedAt(payload as Record<string, unknown>))
       window.setTimeout(() => syncGroupChannelsPreviewFromChats(payload.chatID), 220)
       const groupID = findGroupIDByChannelID(payload.chatID)
       if (groupID) window.setTimeout(() => { void loadGroupChannels(groupID) }, 220)
+
+      const mutedByEvent = Boolean(payload.muted)
+      if (chatID && mutedByEvent && !mutedChatIDs.value[chatID]) {
+        mutedChatIDs.value = { ...mutedChatIDs.value, [chatID]: true }
+      }
+
+      if (mutedByEvent || alreadySeen || !chatID) return
+      const activeChatID = activeMessagesChatID.value.trim()
+      const isActiveChat = Boolean(activeChatID && activeChatID === chatID)
+      const shouldNotify = !windowActive.value || !isActiveChat || !isNearBottom.value
+      if (!shouldNotify) return
+
+      const chat = chats.value.find((c) => (c.id || '').trim() === chatID)
+      const title = ((chat?.title || '').trim() || 'ComBox').slice(0, 80)
+      tryPlayMessageSound()
+      const body = ((chat?.last_message_preview || '').trim() || 'New message').slice(0, 160)
+      tryShowDesktopNotification({ title, body })
     },
     onPresenceUpdate: (payload) => {
       presenceByUserId.value = {

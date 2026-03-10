@@ -178,43 +178,44 @@ const visibleChannels = computed(() => {
 </template>
 
 <style scoped>
-.tpPanel { position:relative; display:grid; grid-template-rows:auto auto minmax(0,1fr); min-width:0; height:100%; background:#f3f3f3; color:#0f172a; }
-.tpHeader { display:flex; align-items:center; gap:12px; padding:10px 14px 8px; border-bottom:1px solid rgba(0,0,0,.08); background:#f3f3f3; }
+.tpPanel { position:relative; display:grid; grid-template-rows:auto auto minmax(0,1fr); min-width:0; height:100%; background:var(--bg-elevated); color:var(--text); }
+.tpHeader { display:flex; align-items:center; gap:12px; padding:10px 14px 8px; border-bottom:1px solid var(--border); background:var(--bg-elevated); }
 .tpHeadText { min-width:0; flex:1 1 auto; }
 .tpTitle { margin:0; font-size:16px; font-weight:600; line-height:1.2; letter-spacing:-0.02em; }
-.tpSubtitle { margin:3px 0 0; color:#7b8794; font-size:12px; }
+.tpSubtitle { margin:3px 0 0; color:var(--text-muted); font-size:12px; }
 .tpActions { display:flex; align-items:center; gap:2px; }
-.tpIconBtn { width:30px; height:30px; border:0; border-radius:10px; background:transparent; color:rgba(0,0,0,.72); display:grid; place-items:center; cursor:pointer; }
-.tpIconBtn:hover { background:rgba(0,0,0,.06); }
-.tpSearchWrap { margin:10px 14px 0; height:42px; border-radius:22px; background:#e7e9ee; display:flex; align-items:center; gap:10px; padding:0 14px; }
-.tpSearchIcon,.tpSearchClear { color:rgba(0,0,0,.5); }
+.tpIconBtn { width:30px; height:30px; border:0; border-radius:10px; background:transparent; color:var(--text-soft); display:grid; place-items:center; cursor:pointer; }
+.tpIconBtn:hover { background:var(--surface-soft); }
+.tpSearchWrap { margin:10px 14px 0; height:42px; border-radius:22px; background:var(--surface-soft); display:flex; align-items:center; gap:10px; padding:0 14px; }
+.tpSearchIcon,.tpSearchClear { color:var(--text-muted); }
 .tpSearchClear { width:24px; height:24px; border:0; background:transparent; display:grid; place-items:center; cursor:pointer; }
-.tpSearchInput { width:100%; border:0; outline:0; background:transparent; color:#111827; font-size:15px; }
+.tpSearchInput { width:100%; border:0; outline:0; background:transparent; color:var(--text); font-size:15px; }
 .tpList { overflow:auto; padding:8px 10px 12px; min-height:0; scrollbar-width:none; -ms-overflow-style:none; }
 .tpList::-webkit-scrollbar { width:0; height:0; display:none; }
-.tpPlaceholder { margin:8px 6px; color:#8994a8; font-size:12px; }
+.tpPlaceholder { margin:8px 6px; color:var(--text-muted); font-size:12px; }
 .tpRow { width:100%; margin:0 0 6px; padding:11px 12px; border:0; border-radius:14px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
-.tpRow:hover { background:#eceef3; }
-.tpRow.selected { background:#dde3f3; box-shadow:inset 0 0 0 1px rgba(146, 159, 190, 0.32); }
+.tpRow:hover { background:var(--surface-soft-hover); }
+.tpRow.selected { background:var(--accent-soft); box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, var(--border)); }
 .tpTopLine,.tpBottomLine { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .tpBottomLine { margin-top:4px; }
 .tpName { min-width:0; font-size:14px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.tpMeta { flex:none; color:#7f8ca1; font-size:12px; }
-.tpPreview { min-width:0; color:#7f8ca1; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.tpUnread { flex:none; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#1976d2; color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; }
+.tpMeta { flex:none; color:var(--text-muted); font-size:12px; }
+.tpPreview { min-width:0; color:var(--text-muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tpUnread { flex:none; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--accent); color:#fff; font-size:11px; font-weight:800; line-height:18px; text-align:center; }
 .tpCreateBackdrop { position:absolute; inset:0; display:flex; justify-content:flex-end; background:rgba(0,0,0,.18); }
-.tpCreateSheet { width:min(100%,320px); padding:16px 14px; border-left:1px solid rgba(0,0,0,.12); background:#fff; }
+.tpCreateSheet { width:min(100%,320px); padding:16px 14px; border-left:1px solid var(--border); background:var(--surface); }
 .tpCreateHeader { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .tpCreateTitle { margin:0; font-size:24px; font-weight:700; }
-.tpCreateHint { margin:10px 0 14px; color:#6b7280; font-size:12px; }
-.tpFieldLabel { display:block; margin-bottom:8px; color:#334155; font-size:12px; }
-.tpCreateInput { width:100%; height:46px; padding:0 12px; border-radius:12px; border:1px solid #d4d9e4; background:#fff; color:#111827; }
+.tpCreateHint { margin:10px 0 14px; color:var(--text-muted); font-size:12px; }
+.tpFieldLabel { display:block; margin-bottom:8px; color:var(--text-soft); font-size:12px; }
+.tpCreateInput { width:100%; height:46px; padding:0 12px; border-radius:12px; border:1px solid var(--border); background:var(--surface-soft); color:var(--text); outline:none; }
+.tpCreateInput:focus { border-color: rgba(74, 144, 217, 0.38); box-shadow: 0 0 0 4px rgba(74, 144, 217, 0.12); }
 .tpTypeRow { display:flex; gap:8px; margin-top:14px; }
-.tpTypeChip { height:38px; padding:0 14px; border:1px solid #d4d9e4; border-radius:999px; background:#fff; color:#334155; font-weight:700; cursor:pointer; }
-.tpTypeChip.active { border-color:#8a76ff; background:rgba(124,104,255,.12); color:#3125cf; }
+.tpTypeChip { height:38px; padding:0 14px; border:1px solid var(--border); border-radius:999px; background:var(--surface-soft); color:var(--text-soft); font-weight:800; cursor:pointer; }
+.tpTypeChip.active { border-color:rgba(74, 144, 217, 0.42); background:var(--accent-soft); color:var(--accent-strong); }
 .tpCreateError { margin:8px 0 0; color:#dc2626; font-size:12px; }
 .tpCreateActions { display:grid; gap:10px; margin-top:16px; }
 .tpPrimaryButton,.tpSecondaryButton { height:42px; border-radius:12px; font-weight:700; cursor:pointer; }
-.tpPrimaryButton { border:none; background:#4a8cff; color:#fff; }
-.tpSecondaryButton { border:1px solid #d4d9e4; background:#fff; color:#334155; }
+.tpPrimaryButton { border:none; background:var(--accent); color:#fff; font-weight:800; }
+.tpSecondaryButton { border:1px solid var(--border); background:var(--surface-soft); color:var(--text-soft); font-weight:800; }
 </style>

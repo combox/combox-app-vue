@@ -85,9 +85,9 @@ const normalized = computed(() => {
 
 .rbBtn,
 .rbAdd {
-  border: 1px solid rgba(0, 0, 0, 0.14);
-  background: #fff;
-  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 999px;
   height: 26px;
   padding: 0 8px;
   display: inline-flex;
@@ -95,6 +95,7 @@ const normalized = computed(() => {
   gap: 6px;
   cursor: pointer;
   font-size: 13px;
+  color: var(--text);
 }
 
 .rbBtn:disabled {
@@ -104,7 +105,7 @@ const normalized = computed(() => {
 
 .rbAvatar {
   margin-left: -4px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--border);
 }
 
 .rbBtn .rbAvatar:first-child {
@@ -119,13 +120,13 @@ const normalized = computed(() => {
 }
 
 .rbBtn.mine {
-  border-color: #1e88e5;
-  background: rgba(30, 136, 229, 0.08);
+  border-color: rgba(74, 144, 217, 0.42);
+  background: var(--accent-soft);
 }
 
 .rbCount {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.6);
+  color: var(--text-muted);
 }
 
 .rbEmoji {

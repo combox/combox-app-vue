@@ -12,9 +12,23 @@ const emit = defineEmits<{
 
 const previewUrl = ref('')
 const isVideo = props.item.file.type.startsWith('video/')
+const isImage = props.item.file.type.startsWith('image/')
+
+function fileExt(name: string): string {
+  const base = (name || '').trim()
+  const idx = base.lastIndexOf('.')
+  if (idx < 0) return ''
+  const ext = base.slice(idx + 1).trim().toLowerCase()
+  return ext && ext.length <= 8 ? ext : ''
+}
+
+const extLabel = fileExt(props.item.file.name)
 
 onMounted(() => {
-  previewUrl.value = URL.createObjectURL(props.item.file)
+  // Only create blob previews for media that we can actually render.
+  if (isVideo || isImage) {
+    previewUrl.value = URL.createObjectURL(props.item.file)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -26,7 +40,11 @@ onBeforeUnmount(() => {
   <div class="tile">
     <div class="tileMedia">
       <video v-if="previewUrl && isVideo" :src="previewUrl" muted playsinline preload="metadata" />
-      <img v-else-if="previewUrl" :src="previewUrl" :alt="item.file.name" />
+      <img v-else-if="previewUrl && isImage" :src="previewUrl" :alt="item.file.name" />
+      <div v-else class="tileFile">
+        <v-icon icon="mdi-file-outline" size="28" />
+        <div v-if="extLabel" class="tileExt">{{ extLabel }}</div>
+      </div>
       <button type="button" class="tileRemove" @click="emit('remove', item.id)">
         <v-icon icon="mdi-close" size="16" />
       </button>
@@ -59,6 +77,31 @@ onBeforeUnmount(() => {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.tileFile {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.03);
+  position: relative;
+}
+
+.tileExt {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.7);
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .tileRemove {
