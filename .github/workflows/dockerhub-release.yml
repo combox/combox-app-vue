@@ -32,12 +32,6 @@ jobs:
         with:
           path: combox-app-vue
 
-      - name: Checkout API dependency
-        uses: actions/checkout@v4
-        with:
-          repository: combox/combox-api
-          path: combox-api
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -80,8 +74,6 @@ jobs:
         with:
           context: combox-app-vue
           file: combox-app-vue/Dockerfile
-          build-contexts: |
-            combox_api=./combox-api
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha

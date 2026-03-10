@@ -1,10 +1,12 @@
 const path = require('path')
+const fs = require('fs')
 const HtmlWebpackPlugin = require('html-webpack-plugin')
 const { VueLoaderPlugin } = require('vue-loader')
 const CopyWebpackPlugin = require('copy-webpack-plugin')
 const webpack = require('webpack')
 
 const root = __dirname
+const localApiEntry = path.resolve(root, '../combox-api/src/index.ts')
 
 module.exports = (env, argv) => {
   const mode = argv.mode || 'development'
@@ -39,10 +41,17 @@ module.exports = (env, argv) => {
     },
     resolve: {
       extensions: ['.ts', '.tsx', '.js', '.jsx', '.vue', '.json'],
-      alias: {
+      alias: (() => {
+        const alias = {
         '@': path.resolve(root, 'src'),
-        'combox-api': path.resolve(root, '../combox-api/src/index.ts'),
-      },
+        }
+        // Local dev: if the monorepo-style sibling checkout exists, prefer source imports.
+        // Docker/CI: fall back to the npm package in node_modules.
+        if (fs.existsSync(localApiEntry)) {
+          alias['combox-api'] = localApiEntry
+        }
+        return alias
+      })(),
     },
     module: {
       rules: [
