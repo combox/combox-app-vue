@@ -77,7 +77,7 @@ const REACTION_EMOJIS = [
   width: 320px;
   max-width: min(320px, calc(100vw - 16px));
   padding: 10px;
-  background: #fff;
+  background: transparent;
 }
 
 .rpGrid {
@@ -100,6 +100,6 @@ const REACTION_EMOJIS = [
 }
 
 .rpEmoji:hover {
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--accent-soft);
 }
 </style>

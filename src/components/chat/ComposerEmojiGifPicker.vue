@@ -45,18 +45,30 @@ function saveRecentEmoji(emoji: string) {
   window.localStorage.setItem(RECENT_EMOJIS_STORAGE_KEY, JSON.stringify(next))
 }
 
+// emojibase group ids:
+// 0: Smileys & Emotion
+// 1: People & Body
+// 2: Components (skin tones / hair) - we hide these for now (Telegram-style)
+// 3: Animals & Nature
+// 4: Food & Drink
+// 5: Travel & Places
+// 6: Activities
+// 7: Objects
+// 8: Symbols
+// 9: Flags
 const GROUP_LABEL_KEYS: Record<number, string> = {
   0: 'chat.emoji_smileys_people',
   1: 'chat.emoji_people_body',
-  2: 'chat.emoji_animals_nature',
-  3: 'chat.emoji_food_drink',
-  4: 'chat.emoji_travel_places',
-  5: 'chat.emoji_activities',
-  6: 'chat.emoji_objects',
-  7: 'chat.emoji_symbols',
+  3: 'chat.emoji_animals_nature',
+  4: 'chat.emoji_food_drink',
+  5: 'chat.emoji_travel_places',
+  6: 'chat.emoji_activities',
+  7: 'chat.emoji_objects',
   8: 'chat.emoji_symbols',
   9: 'chat.emoji_flags',
 }
+
+const HIDDEN_GROUPS = new Set<number>([2])
 
 async function ensureEmojiDataLoaded() {
   if (emojiLoaded.value || emojiLoading.value) return
@@ -97,6 +109,7 @@ const EMOJI_SECTIONS = computed<EmojiSection[]>(() => {
   sections.set(recentLabel, [...recentEmojis.value])
 
   for (const entry of emojiEntries.value) {
+    if (HIDDEN_GROUPS.has(entry.group)) continue
     if (recentEmojis.value.includes(entry.emoji)) continue
     const label = t(GROUP_LABEL_KEYS[entry.group] || 'chat.emoji_more', undefined, 'More')
     const bucket = sections.get(label) || []
@@ -114,6 +127,7 @@ const filteredSections = computed(() => {
   const q = emojiQuery.value.trim().toLowerCase()
   if (!q) return EMOJI_SECTIONS.value
   const matched = emojiEntries.value
+    .filter((entry) => !HIDDEN_GROUPS.has(entry.group))
     .filter((entry) => entry.emoji.includes(q) || entry.search.includes(q))
     .map((entry) => entry.emoji)
   const recentMatched = recentEmojis.value.filter((emoji) => emoji.includes(q))
@@ -323,36 +337,259 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
 </template>
 
 <style scoped>
-.ep { width: 388px; height: 432px; background: #fff; border: 1px solid rgba(0,0,0,.1); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.12); display: flex; flex-direction: column; overflow: hidden; font-family: inherit; }
-.ep-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; padding: 10px 10px 0; gap: 8px; }
-.ep-search-wrap { flex-shrink: 0; display: flex; align-items: center; gap: 8px; background: #f1f3f7; border-radius: 10px; padding: 0 10px; height: 36px; }
-.ep-search-icon { width: 16px; height: 16px; color: rgba(0,0,0,.4); flex-shrink: 0; }
-.ep-search { width: 100%; border: 0; outline: 0; background: transparent; font-size: 14px; color: #000; }
-.ep-search::placeholder { color: rgba(0,0,0,.38); }
-.ep-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-bottom: 6px; scrollbar-width: none; -ms-overflow-style: none; }
-.ep-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
-.ep-section-label { font-size: 11px; font-weight: 700; color: rgba(0,0,0,.4); text-transform: uppercase; letter-spacing: .06em; padding: 8px 2px 4px; }
-.ep-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
-.ep-item { aspect-ratio: 1; border: 0; background: transparent; border-radius: 8px; display: grid; place-items: center; font-size: 22px; cursor: pointer; transition: background 100ms; line-height: 1; }
-.ep-item:hover { background: rgba(0,0,0,.07); }
-.ep-item:active { background: rgba(0,0,0,.12); transform: scale(.9); }
-.ep-gif-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-.ep-gif-tile { position: relative; aspect-ratio: 1; border: 0; border-radius: 8px; overflow: hidden; padding: 0; cursor: pointer; background: rgba(0,0,0,.06); }
-.ep-gif-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity 180ms ease; }
-.ep-gif-tile:hover img { filter: brightness(1.08); }
-.ep-gif-skeleton { aspect-ratio: 1; border-radius: 8px; background: rgba(0,0,0,.07); animation: skelPulse 1.4s ease-in-out infinite; }
-.ep-gif-skeleton-inner { position: absolute; inset: 0; background: linear-gradient(110deg, rgba(0,0,0,.06) 8%, rgba(0,0,0,.12) 18%, rgba(0,0,0,.06) 33%); background-size: 220% 100%; animation: skelPulse 1.4s ease-in-out infinite; }
-@keyframes skelPulse { 0% { background-position: 220% 0; opacity: 1; } 50% { opacity: .6; } 100% { background-position: -220% 0; opacity: 1; } }
-.ep-load-more { width: 100%; margin-top: 8px; height: 32px; border: 1px solid rgba(0,0,0,.1); border-radius: 8px; background: transparent; font-size: 13px; color: rgba(0,0,0,.55); cursor: pointer; transition: background 100ms; }
-.ep-load-more:hover:not(:disabled) { background: rgba(0,0,0,.05); }
-.ep-load-more:disabled { opacity: .5; cursor: default; }
-.ep-empty { padding: 24px 0; text-align: center; color: rgba(0,0,0,.38); font-size: 13px; }
-.ep-stickers-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+.ep {
+  width: 388px;
+  height: 432px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-soft);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: inherit;
+  color: var(--text);
+}
+
+.ep-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 10px 0;
+  gap: 8px;
+}
+
+.ep-search-wrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-soft);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 0 10px;
+  height: 36px;
+}
+
+.ep-search-wrap:focus-within {
+  border-color: var(--border-strong);
+  background: var(--surface-soft-hover);
+}
+
+.ep-search-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.ep-search {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.ep-search::placeholder {
+  color: var(--text-muted);
+}
+
+.ep-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 6px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.ep-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.ep-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 8px 2px 4px;
+}
+
+.ep-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+}
+
+.ep-item {
+  aspect-ratio: 1;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  cursor: pointer;
+  transition: background 100ms, transform 100ms;
+  line-height: 1;
+  /* Ensure emoji always uses the color emoji font even inside Vuetify overlays. */
+  font-family: 'NotoColorEmoji', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
+  font-variant-emoji: emoji;
+}
+
+.ep-item:hover {
+  background: var(--surface-soft-hover);
+}
+
+.ep-item:active {
+  background: var(--surface-selected);
+  transform: scale(0.92);
+}
+
+.ep-gif-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.ep-gif-tile {
+  position: relative;
+  aspect-ratio: 1;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  padding: 0;
+  cursor: pointer;
+  background: var(--surface-soft);
+}
+
+.ep-gif-tile img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: opacity 180ms ease;
+}
+
+.ep-gif-tile:hover img {
+  filter: brightness(1.08);
+}
+
+.ep-gif-skeleton {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  animation: skelPulse 1.4s ease-in-out infinite;
+}
+
+.ep-gif-skeleton-inner {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    rgba(255, 255, 255, 0.06) 8%,
+    rgba(255, 255, 255, 0.12) 18%,
+    rgba(255, 255, 255, 0.06) 33%
+  );
+  background-size: 220% 100%;
+  animation: skelPulse 1.4s ease-in-out infinite;
+}
+
+html[data-theme='light'] .ep-gif-skeleton-inner {
+  background: linear-gradient(
+    110deg,
+    rgba(15, 23, 42, 0.06) 8%,
+    rgba(15, 23, 42, 0.12) 18%,
+    rgba(15, 23, 42, 0.06) 33%
+  );
+}
+
+@keyframes skelPulse {
+  0% { background-position: 220% 0; opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { background-position: -220% 0; opacity: 1; }
+}
+
+.ep-load-more {
+  width: 100%;
+  margin-top: 8px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: background 100ms;
+}
+
+.ep-load-more:hover:not(:disabled) {
+  background: var(--surface-soft-hover);
+}
+
+.ep-load-more:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ep-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.ep-stickers-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
 .ep-sticker-icon { font-size: 40px; }
-.ep-sticker-text { font-size: 13px; color: rgba(0,0,0,.4); }
-.ep-tabs { flex-shrink: 0; display: flex; align-items: center; border-top: 1px solid rgba(0,0,0,.08); padding: 4px 6px; gap: 2px; }
-.ep-tab { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; display: grid; place-items: center; cursor: pointer; color: rgba(0,0,0,.45); transition: background 100ms, color 100ms; }
+.ep-sticker-text { font-size: 13px; color: var(--text-muted); }
+
+.ep-tabs {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding: 4px 6px;
+  gap: 2px;
+}
+
+.ep-tab {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 100ms, color 100ms;
+}
+
 .ep-tab svg { width: 20px; height: 20px; }
-.ep-tab:hover { background: rgba(0,0,0,.06); color: rgba(0,0,0,.7); }
-.ep-tab.active { background: rgba(74,144,217,.12); color: #4a90d9; }
+
+.ep-tab:hover {
+  background: var(--surface-soft-hover);
+  color: var(--text);
+}
+
+.ep-tab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
 </style>

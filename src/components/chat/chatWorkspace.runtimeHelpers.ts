@@ -64,7 +64,6 @@ export function setupWorkspaceRuntimeHelpers(input: SetupWorkspaceRuntimeHelpers
 
   function setPendingFiles(files: FileList) {
     const next = Array.from(files)
-      .filter((file) => file.type.startsWith('image/') || file.type.startsWith('video/'))
       .map((file) => ({
         id: `${file.name}:${file.size}:${file.lastModified}:${Math.random().toString(36).slice(2)}`,
         file,

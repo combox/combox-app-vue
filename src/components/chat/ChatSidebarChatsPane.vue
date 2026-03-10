@@ -207,7 +207,7 @@ function formatDate(value: string): string {
 .cpRoot {
   height: 100%;
   min-height: 0;
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--surface);
   backdrop-filter: blur(18px);
   position: relative;
   display: flex;
@@ -216,7 +216,7 @@ function formatDate(value: string): string {
 
 /* Compact (shelf) mode */
 .cpRoot.compact {
-  background: rgba(243, 246, 251, 0.92);
+  background: var(--bg-elevated);
 }
 
 /* ── Buttons ── */
@@ -231,7 +231,7 @@ function formatDate(value: string): string {
 /* ── Header ── */
 .cpHeader { padding: 6px 8px 4px 14px; display: flex; align-items: center; justify-content: space-between; min-height: 52px; }
 .cpTitleRow { display: flex; align-items: center; gap: 4px; }
-.cpTitle { font-size: 20px; font-weight: 700; line-height: 1; color: #000; }
+.cpTitle { font-size: 20px; font-weight: 800; line-height: 1; color: var(--text); }
 
 /* ── Search ── */
 .cpSearchWrap {

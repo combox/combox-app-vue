@@ -5,10 +5,12 @@ import { openComboxAwareUrl } from './chatUtils'
 const props = defineProps<{
   url: string
   mediaOverlayOpen?: boolean
+  dismissible?: boolean
 }>()
 
 const emit = defineEmits<{
   openVideo: [payload: { attachmentID: string; src: string; poster?: string; filename?: string }]
+  dismiss: [url: string]
 }>()
 
 declare global {
@@ -229,6 +231,28 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewState | null> {
     return null
   }
 
+  const host = (() => {
+    try {
+      return new URL(url).hostname.replace(/^www\./i, '').toLowerCase()
+    } catch {
+      return ''
+    }
+  })()
+
+  // Avoid previews for local/dev/private hosts (noise + avoids accidental internal fetches).
+  if (
+    !host ||
+    host === 'localhost' ||
+    host === '0.0.0.0' ||
+    host === '127.0.0.1' ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    !host.includes('.')
+  ) {
+    linkPreviewCache.set(url, null)
+    return null
+  }
+
   const githubRepo = parseGitHubRepo(url)
   if (githubRepo) {
     try {
@@ -254,8 +278,44 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewState | null> {
       return null
     }
   }
-  linkPreviewCache.set(url, null)
-  return null
+
+  try {
+    const response = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(url)}`)
+    if (!response.ok) {
+      linkPreviewFailedAt.set(url, Date.now())
+      return null
+    }
+    const payload = (await response.json()) as {
+      title?: string
+      author_name?: string
+      provider_name?: string
+      thumbnail_url?: string
+    }
+
+    const title = payload.title?.trim() || ''
+    const provider = payload.provider_name?.trim() || ''
+    const description = payload.author_name?.trim() || host
+    const image = payload.thumbnail_url?.trim() || ''
+    const hasRichPreview = Boolean(title && title !== url && (provider || image || description !== host))
+    if (!hasRichPreview) {
+      linkPreviewCache.set(url, null)
+      return null
+    }
+
+    const next: LinkPreviewState = {
+      url,
+      title,
+      description,
+      provider: provider || host,
+      image,
+    }
+    linkPreviewCache.set(url, next)
+    linkPreviewFailedAt.delete(url)
+    return next
+  } catch {
+    linkPreviewFailedAt.set(url, Date.now())
+    return null
+  }
 }
 
 watch(
@@ -404,10 +464,19 @@ function open() {
   }
   openComboxAwareUrl(normalizedUrl.value)
 }
+
+const shouldRender = computed(() => Boolean(normalizedUrl.value) && (isYouTube.value || Boolean(preview.value)))
+
+function dismiss(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (normalizedUrl.value) emit('dismiss', normalizedUrl.value)
+}
 </script>
 
 <template>
   <div
+    v-if="shouldRender"
     ref="cardRef"
     class="lpCard"
     :class="{ youtube: isYouTube }"
@@ -417,6 +486,16 @@ function open() {
     @keydown.enter.prevent="open"
     @keydown.space.prevent="open"
   >
+    <button
+      v-if="dismissible"
+      type="button"
+      class="lpDismiss"
+      aria-label="Dismiss preview"
+      @click="dismiss"
+    >
+      <v-icon icon="mdi-close" size="16" />
+    </button>
+
     <div v-if="displayImage" class="lpMedia">
       <img :src="displayImage" alt="" class="lpThumb" />
       <div v-if="isYouTube && youtubeLiveActive" class="lpYoutubeLive" :class="{ 'is-visible': youtubeLiveReady }">
@@ -439,15 +518,38 @@ function open() {
 .lpCard {
   width: 100%;
   max-width: 420px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--border);
+  background: var(--surface);
   padding: 0;
   display: grid;
   gap: 0;
   text-align: left;
   overflow: hidden;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 12px;
+  position: relative;
+}
+
+.lpDismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+html[data-theme='light'] .lpDismiss {
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  background: rgba(255, 255, 255, 0.78);
+  color: rgba(0, 0, 0, 0.8);
 }
 
 .lpMedia {
@@ -456,7 +558,7 @@ function open() {
   aspect-ratio: 16 / 9;
   max-height: 236px;
   overflow: hidden;
-  background: #ddd;
+  background: var(--surface-soft);
 }
 
 .lpThumb {
@@ -520,7 +622,7 @@ function open() {
 
 .lpHost {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.56);
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -530,7 +632,7 @@ function open() {
   margin-top: 2px;
   font-size: 15px;
   font-weight: 700;
-  color: rgba(0, 0, 0, 0.86);
+  color: var(--text);
   line-height: 1.25;
   word-break: break-word;
 }
@@ -538,7 +640,7 @@ function open() {
 .lpDesc {
   margin-top: 4px;
   font-size: 13px;
-  color: rgba(0, 0, 0, 0.62);
+  color: var(--text-soft);
   line-height: 1.25;
   display: -webkit-box;
   -webkit-line-clamp: 2;

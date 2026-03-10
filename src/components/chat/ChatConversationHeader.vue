@@ -88,7 +88,7 @@ function openMenu(event: MouseEvent) {
   position: sticky;
   top: 0;
   z-index: 3;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--surface);
   backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--border);
 }
@@ -168,7 +168,7 @@ function openMenu(event: MouseEvent) {
   height: 32px;
   border: 0;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--surface-soft);
   color: var(--text-soft);
   display: grid;
   place-items: center;
@@ -176,8 +176,8 @@ function openMenu(event: MouseEvent) {
 }
 
 .convActionBtn:hover {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--surface-soft-hover);
+  color: var(--text);
 }
 
 .convSearch {

@@ -67,12 +67,18 @@ function selectLocale(id: string, enabled: boolean) {
   display: grid;
   place-items: center;
   padding: 24px 16px;
+  background: var(--app-bg);
 }
 
 .auth-sheet {
   width: min(480px, 100%);
   position: relative;
   padding: 16px;
+  border-radius: var(--radius-card);
+  background: var(--surface) !important;
+  color: var(--text);
+  border-color: var(--border) !important;
+  box-shadow: var(--shadow-soft);
 }
 
 @media (min-width: 600px) {
@@ -88,8 +94,8 @@ function selectLocale(id: string, enabled: boolean) {
   width: 34px;
   height: 34px;
   border-radius: 0;
-  color: rgba(0, 0, 0, 0.72);
-  border-color: rgba(0, 0, 0, 0.12);
+  color: var(--text-soft);
+  border-color: var(--border-strong);
 }
 
 .lang-header {
@@ -109,6 +115,6 @@ function selectLocale(id: string, enabled: boolean) {
 }
 
 :deep(.lang-drawer .v-list-item--active) {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--surface-soft);
 }
 </style>

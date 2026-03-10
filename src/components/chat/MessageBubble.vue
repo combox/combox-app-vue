@@ -4,6 +4,7 @@ import { useI18n } from '../../i18n/i18n'
 import { parseMessageContent } from 'combox-api'
 import { formatMessageTime, isComboxUrl, normalizeAvatarSrc, openComboxAwareUrl, toCurrentOriginComboxUrl } from './chatUtils'
 import LinkPreviewCard from './LinkPreviewCard.vue'
+import LazyDecodedImage from './LazyDecodedImage.vue'
 import MessageMedia from './MessageMedia.vue'
 import ReactionBar from './ReactionBar.vue'
 import type { ResolvedAttachment, ViewMessage } from './chatTypes'
@@ -38,10 +39,58 @@ const emit = defineEmits<{
   openUsername: [username: string]
   replyToMessage: [message: ViewMessage]
   openDiscussion: [message: ViewMessage]
+  jumpToMessage: [messageId: string]
 }>()
 
 const { t } = useI18n()
-const visibleText = computed(() => props.message.text || '')
+
+const NO_PREVIEW_TOKEN_RE = /\[\[nopreview:([^\]]+)\]\]/gi
+
+function parseNoPreviewTokens(text: string): { cleanText: string; suppressedUrls: Set<string> } {
+  const suppressedUrls = new Set<string>()
+  if (!text) return { cleanText: '', suppressedUrls }
+  const cleanText = text.replace(NO_PREVIEW_TOKEN_RE, (_match, encoded) => {
+    const raw = String(encoded || '').trim()
+    if (!raw) return ''
+    try {
+      suppressedUrls.add(decodeURIComponent(raw))
+    } catch {
+      // ignore bad token
+    }
+    return ''
+  })
+  return { cleanText, suppressedUrls }
+}
+
+function isPreviewEligibleUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.toLowerCase()
+    if (!host) return false
+    if (host === 'localhost' || host === '0.0.0.0' || host === '127.0.0.1') return false
+    if (host.endsWith('.local') || host.endsWith('.internal')) return false
+
+    // Basic private IP blocks (IPv4).
+    const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+    if (m) {
+      const a = Number(m[1])
+      const b = Number(m[2])
+      if (a === 10) return false
+      if (a === 192 && b === 168) return false
+      if (a === 172 && b >= 16 && b <= 31) return false
+      return true
+    }
+
+    // Hostnames without a dot are typically local/dev.
+    if (!host.includes('.')) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+const parsedText = computed(() => parseNoPreviewTokens(props.message.text || ''))
+const visibleText = computed(() => parsedText.value.cleanText || '')
 const showText = computed(() => Boolean(visibleText.value.trim()))
 const timeText = computed(() => formatMessageTime(props.message.raw.created_at))
 const isEdited = computed(() => Boolean((props.message.raw.edited_at || '').trim()))
@@ -51,7 +100,10 @@ const senderAvatar = computed(() => normalizeAvatarSrc((props.avatarByUserId || 
 const senderName = computed(() => ((props.senderNameByUserId || {})[senderUserID.value] || '').trim())
 const senderRole = computed(() => ((props.senderRoleByUserId || {})[senderUserID.value] || '').trim())
 const replySender = computed(() => (props.message.raw.reply_to_message_sender_name || '').trim())
-const replyPreview = computed(() => parseMessageContent(props.message.raw.reply_to_message_preview || '').text.trim())
+const replyPreview = computed(() => {
+  const raw = parseMessageContent(props.message.raw.reply_to_message_preview || '').text.trim()
+  return raw.length > 140 ? `${raw.slice(0, 140).trim()}…` : raw
+})
 const hasReply = computed(() => Boolean((props.message.raw.reply_to_message_id || '').trim()))
 const allAttachmentsAreImages = computed(
   () => props.message.attachments.length > 0 && props.message.attachments.every((item) => item.kind === 'image'),
@@ -66,14 +118,28 @@ const hasVideoAttachment = computed(() => props.message.attachments.some((item) 
 const showCommentAction = computed(() =>
   Boolean(props.isPublicChannel && props.commentsEnabled && props.isTopLevelPost),
 )
-const linkItems = computed(() => {
+const linkUrls = computed(() => {
   const re = /\b((?:https?:\/\/|www\.)[^\s<>"'`]+)\b/gi
-  const found = new Set<string>()
+  const found: string[] = []
+  const seen = new Set<string>()
   for (const match of visibleText.value.matchAll(re)) {
     const raw = (match[1] || '').trim()
-    if (raw) found.add(raw)
+    if (!raw) continue
+    if (seen.has(raw)) continue
+    seen.add(raw)
+    found.push(raw)
   }
-  return Array.from(found)
+  return found
+})
+const previewLink = computed(() => {
+  // tweb-like: show a single preview only when there's exactly one link.
+  if (linkUrls.value.length !== 1) return ''
+  const raw = linkUrls.value[0] || ''
+  const resolvedHref = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+  if (isComboxUrl(resolvedHref)) return ''
+  if (parsedText.value.suppressedUrls.has(resolvedHref)) return ''
+  if (!isPreviewEligibleUrl(resolvedHref)) return ''
+  return resolvedHref
 })
 const textHtml = computed(() => {
   const escaped = visibleText.value
@@ -105,9 +171,8 @@ function onReact(emoji: string) {
 
 function imageGalleryStyle(attachments: ResolvedAttachment[]) {
   const columns = attachments.length >= 2 ? 2 : 1
-  const minCellWidth = attachments.length >= 8 ? 132 : attachments.length >= 6 ? 144 : attachments.length >= 4 ? 156 : 176
   return {
-    gridTemplateColumns: `repeat(${columns}, minmax(${minCellWidth}px, 1fr))`,
+    gridTemplateColumns: columns === 2 ? 'repeat(2, 1fr)' : '1fr',
   }
 }
 
@@ -164,7 +229,12 @@ function startComment() {
           class="mbGalleryItem"
           @click="attachment.url && $emit('openImage', attachment.url)"
         >
-          <img class="mbGalleryImage" :src="attachment.url || attachment.previewUrl" :alt="attachment.filename || 'image'" loading="lazy" decoding="async" />
+          <LazyDecodedImage
+            :src="attachment.url || attachment.previewUrl"
+            :preview-src="attachment.previewUrl"
+            :alt="attachment.filename || 'image'"
+            img-class="mbGalleryImage"
+          />
         </button>
       </div>
 
@@ -210,7 +280,7 @@ function startComment() {
         <span v-if="senderRole" class="mbSenderRole">{{ senderRole }}</span>
       </div>
       <article class="mbBubble" :class="{ hasVideoAttachment }" @contextmenu="onContextMenu" @click="onBubbleClick">
-      <div v-if="hasReply" class="mbReply">
+      <div v-if="hasReply" class="mbReply" role="button" tabindex="0" @click.stop="onReplyClick" @keydown.enter.prevent="onReplyClick" @keydown.space.prevent="onReplyClick">
         <div class="mbReplyAccent" aria-hidden="true" />
         <div class="mbReplyBody">
           <div class="mbReplySender">{{ replySender || t('chat.reply') }}</div>
@@ -221,11 +291,9 @@ function startComment() {
       <p v-if="showText" class="mbText" v-html="textHtml" />
       <p v-else-if="message.attachments.length === 0" class="mbText">{{ t('chat.empty_message') }}</p>
 
-      <div v-if="linkItems.length > 0" class="mbLinkList">
+      <div v-if="previewLink" class="mbLinkList">
         <LinkPreviewCard
-          v-for="item in linkItems"
-          :key="item"
-          :url="item"
+          :url="previewLink"
           :media-overlay-open="mediaOverlayOpen"
           @open-video="$emit('openVideo', $event)"
         />
@@ -241,7 +309,12 @@ function startComment() {
               class="mbGalleryItem"
               @click="attachment.url && $emit('openImage', attachment.url)"
             >
-              <img class="mbGalleryImage" :src="attachment.url || attachment.previewUrl" :alt="attachment.filename || 'image'" loading="lazy" decoding="async" />
+              <LazyDecodedImage
+                :src="attachment.url"
+                :preview-src="attachment.previewUrl"
+                :alt="attachment.filename || 'image'"
+                img-class="mbGalleryImage"
+              />
             </button>
           </div>
         </template>
@@ -321,7 +394,7 @@ function startComment() {
   min-width: 0;
   padding: 8px 12px 8px;
   border-radius: 14px 14px 14px 8px;
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
   color: var(--text);
@@ -333,10 +406,10 @@ function startComment() {
   min-height: 42px;
   padding: 0 12px;
   border: 0;
-  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  border-top: 1px solid var(--border);
   border-radius: 0 0 14px 8px;
-  background: rgba(15, 23, 42, 0.04);
-  color: #475569;
+  background: var(--surface-soft);
+  color: var(--text-soft);
   font-size: 12px;
   font-weight: 700;
   display: flex;
@@ -462,8 +535,9 @@ function startComment() {
 }
 
 .mbRow.mine .mbBubble {
-  background: rgba(226, 238, 255, 0.95);
-  border-color: rgba(74, 144, 217, 0.18);
+  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-strong));
+  border-color: rgba(74, 144, 217, 0.24);
   border-radius: 14px 14px 8px 14px;
 }
 
@@ -508,19 +582,19 @@ function startComment() {
 }
 
 .bubbleAttachments.mediaOnlyGrid {
-  width: fit-content;
+  width: min(520px, calc(100vw - 72px));
   max-width: min(760px, calc(100vw - 72px));
 }
 
 .mbImageGallery {
-  width: fit-content;
+  width: min(520px, calc(100vw - 72px));
   max-width: min(760px, calc(100vw - 72px));
   display: grid;
   gap: 4px;
 }
 
 .mbImageGallery.inBubble {
-  width: fit-content;
+  width: min(520px, calc(100vw - 72px));
   max-width: min(760px, calc(100vw - 72px));
 }
 
@@ -537,9 +611,10 @@ function startComment() {
   aspect-ratio: 1 / 1;
   content-visibility: auto;
   contain: layout paint size;
+  contain-intrinsic-size: 160px 160px;
 }
 
-.mbGalleryImage {
+:deep(.mbGalleryImage) {
   width: 100%;
   height: 100%;
   object-fit: cover;

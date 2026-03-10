@@ -45,7 +45,7 @@ export function createGroupActions(input: WorkspaceActionsInput) {
   }
 
   async function toggleMuteSelectedChat() {
-    const chatID = input.selectedChatID.value
+    const chatID = (input.activeMessagesChatID.value || input.selectedChatID.value).trim()
     if (!chatID) return
     const nextMuted = !input.mutedChatIDs.value[chatID]
     input.mutedChatIDs.value = { ...input.mutedChatIDs.value, [chatID]: nextMuted }

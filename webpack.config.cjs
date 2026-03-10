@@ -92,7 +92,7 @@ module.exports = (env, argv) => {
           test: /\.(png|jpe?g|gif|svg|webp|woff2?|eot|ttf|otf)$/i,
           type: 'asset',
           generator: {
-            filename: 'assets/[name][ext]'
+            filename: isDev ? 'assets/[name][ext]' : 'assets/[name].[contenthash:8][ext]',
           }
         },
       ],
@@ -133,6 +133,7 @@ module.exports = (env, argv) => {
       port: 4173,
       historyApiFallback: true,
       hot: true,
+      compress: true,
       allowedHosts: 'all',
       static: {
         directory: path.resolve(root, 'public'),

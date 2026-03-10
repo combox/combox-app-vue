@@ -408,8 +408,14 @@ onBeforeUnmount(() => {
     :style="{ '--video-target-width': `${targetWidth}px`, '--video-aspect-ratio': String(normalizedRatio) }"
     @click="emit('open', { attachmentID, src, poster: poster || undefined, filename: filename || undefined })"
   >
-    <div class="video-preview-media" :class="{ 'is-tiny-poster': isTinyPoster && !frameReady }">
-      <img v-if="poster" class="video-preview-poster" :class="{ 'is-hidden': frameReady }" :src="poster" :alt="caption || 'video'" />
+    <div class="video-preview-media" :class="{ 'is-tiny-poster': isTinyPoster && !frameReady, 'is-loading': loadLive && !frameReady }">
+      <img
+        v-if="poster"
+        class="video-preview-poster"
+        :class="{ 'is-hidden': frameReady, 'is-blurred': !frameReady }"
+        :src="poster"
+        :alt="caption || 'video'"
+      />
       <div v-else class="video-preview-fallback" />
 
       <video
@@ -427,6 +433,7 @@ onBeforeUnmount(() => {
       <div class="video-preview-duration">{{ durationLabel }}</div>
       <div class="video-preview-play">
         <span class="video-preview-play-inner" aria-hidden="true">
+          <span v-if="loadLive && !frameReady" class="video-preview-spinner" aria-hidden="true" />
           <span class="video-preview-triangle" />
         </span>
       </div>
@@ -463,6 +470,20 @@ onBeforeUnmount(() => {
   transform: scale(1.006);
 }
 
+.video-preview-media::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(10, 14, 20, 0.16), rgba(10, 14, 20, 0.22));
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.video-preview-media.is-loading::after {
+  opacity: 1;
+}
+
 .video-preview-media.is-tiny-poster::after {
   content: '';
   position: absolute;
@@ -477,6 +498,11 @@ onBeforeUnmount(() => {
   object-fit: cover;
   display: block;
   transition: opacity 180ms ease-in-out;
+}
+
+.video-preview-poster.is-blurred {
+  filter: blur(16px) saturate(1.06) contrast(1.04);
+  transform: scale(1.05);
 }
 
 .video-preview-poster.is-hidden {
@@ -533,6 +559,21 @@ onBeforeUnmount(() => {
   place-items: center;
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(2px);
+  position: relative;
+}
+
+.video-preview-spinner {
+  position: absolute;
+  inset: -6px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.24);
+  border-top-color: rgba(255, 255, 255, 0.92);
+  animation: videoSpin 780ms linear infinite;
+}
+
+@keyframes videoSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .video-preview-name {

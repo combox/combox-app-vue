@@ -1,6 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from '../../i18n/i18n'
+import {
+  accentPresets,
+  applyTheme,
+  loadThemePrefs,
+  resolveEffectiveTheme,
+  resolveWallpaperCss,
+  saveThemePrefs,
+  wallpaperPresets,
+  type AccentId,
+  type ThemeMode,
+  type ThemePrefs,
+  type WallpaperId,
+} from '../../theme/theme'
 
 const props = defineProps<{
   currentUserAvatarSrc: string
@@ -33,6 +46,89 @@ const emit = defineEmits<{
 
 const editMode = ref(false)
 const { t } = useI18n()
+
+const themePrefs = ref<ThemePrefs>(loadThemePrefs())
+const effectiveTheme = computed(() => resolveEffectiveTheme(themePrefs.value.mode))
+const systemTheme = computed(() => resolveEffectiveTheme('system'))
+
+const APP_BG_LIGHT =
+  'radial-gradient(circle at top left, rgba(255, 255, 255, 0.92), rgba(238, 242, 247, 0.95) 42%), linear-gradient(180deg, #f5f7fb 0%, #edf1f6 100%)'
+const APP_BG_DARK =
+  'radial-gradient(circle at top left, rgba(36, 36, 44, 0.92), rgba(11, 11, 12, 0.95) 42%), linear-gradient(180deg, #0b0b0c 0%, #050506 100%)'
+
+const systemAppBgPreview = computed(() => (systemTheme.value === 'dark' ? APP_BG_DARK : APP_BG_LIGHT))
+
+function updateTheme(patch: Partial<ThemePrefs>) {
+  themePrefs.value = { ...themePrefs.value, ...patch }
+  applyTheme(themePrefs.value)
+  saveThemePrefs(themePrefs.value)
+}
+
+function setThemeMode(mode: ThemeMode) {
+  const before = { ...themePrefs.value }
+  updateTheme({ mode })
+
+  // Telegram Web-like behavior: selecting Dark should immediately feel "dark",
+  // even if the user never configured dark wallpaper/colors before.
+  const effective = resolveEffectiveTheme(mode)
+
+  if (effective === 'dark') {
+    const looksLight =
+      before.wallpaperDark === 'paper' ||
+      before.wallpaperDark === 'sky' ||
+      before.wallpaperDark === 'mint' ||
+      before.wallpaperDark === 'lavender' ||
+      before.wallpaperDark === 'peach'
+
+    if (looksLight) {
+      updateTheme({ wallpaperDark: 'midnight', customWallpaperBaseDark: '#111827' })
+    } else if ((before.customWallpaperBaseDark || '').toLowerCase() === '#dbeafe') {
+      updateTheme({ customWallpaperBaseDark: '#111827' })
+    }
+
+    return
+  }
+
+  if (effective === 'light') {
+    if (before.wallpaperLight === 'midnight') {
+      updateTheme({ wallpaperLight: 'paper', customWallpaperBaseLight: '#dbeafe' })
+    }
+  }
+}
+
+function setWallpaper(id: WallpaperId) {
+  if (effectiveTheme.value === 'dark') {
+    updateTheme({ wallpaperDark: id })
+    return
+  }
+  updateTheme({ wallpaperLight: id })
+}
+
+function setAccent(id: AccentId) {
+  updateTheme({ accent: id })
+}
+
+function setCustomAccent(hex: string) {
+  updateTheme({ accent: 'custom', customAccent: hex })
+}
+
+function setCustomWallpaperBase(hex: string) {
+  if (effectiveTheme.value === 'dark') {
+    updateTheme({ wallpaperDark: 'custom', customWallpaperBaseDark: hex })
+    return
+  }
+  updateTheme({ wallpaperLight: 'custom', customWallpaperBaseLight: hex })
+}
+
+function wallpaperPreview(id: WallpaperId): string {
+  const patch = effectiveTheme.value === 'dark' ? { wallpaperDark: id } : { wallpaperLight: id }
+  return resolveWallpaperCss({ ...themePrefs.value, ...patch }, effectiveTheme.value)
+}
+
+const selectedWallpaper = computed(() => (effectiveTheme.value === 'dark' ? themePrefs.value.wallpaperDark : themePrefs.value.wallpaperLight))
+const selectedWallpaperBase = computed(() =>
+  effectiveTheme.value === 'dark' ? themePrefs.value.customWallpaperBaseDark || '#111827' : themePrefs.value.customWallpaperBaseLight || '#dbeafe',
+)
 
 const initials = computed(() => {
   const first = props.profileDraft.first_name.trim().slice(0, 1).toUpperCase()
@@ -114,6 +210,83 @@ function handleBack() {
               <div class="spInfoLabel">{{ t('settings.session_duration') }}</div>
             </div>
           </article>
+        </section>
+
+        <section class="spSection">
+          <div class="spSectionTitle">{{ t('settings.appearance', {}, 'Appearance') }}</div>
+
+          <div class="spRow spRow--stack">
+            <div class="spRowLabel">{{ t('settings.theme', {}, 'Theme') }}</div>
+            <div class="spThemeCards">
+              <button type="button" class="spThemeCard" :class="{ active: themePrefs.mode === 'system' }" @click="setThemeMode('system')">
+                <div class="spThemePreview" :style="{ background: systemAppBgPreview }" />
+                <div class="spThemeName">{{ t('settings.theme_system', {}, 'System') }}</div>
+                <div class="spThemeHint">{{ systemTheme === 'dark' ? t('settings.theme_dark', {}, 'Dark') : t('settings.theme_light', {}, 'Light') }}</div>
+              </button>
+
+              <button type="button" class="spThemeCard" :class="{ active: themePrefs.mode === 'light' }" @click="setThemeMode('light')">
+                <div class="spThemePreview spThemePreview--light" />
+                <div class="spThemeName">{{ t('settings.theme_light', {}, 'Light') }}</div>
+                <div class="spThemeHint">{{ t('settings.theme_light', {}, 'Light') }}</div>
+              </button>
+
+              <button type="button" class="spThemeCard" :class="{ active: themePrefs.mode === 'dark' }" @click="setThemeMode('dark')">
+                <div class="spThemePreview spThemePreview--dark" />
+                <div class="spThemeName">{{ t('settings.theme_dark', {}, 'Dark') }}</div>
+                <div class="spThemeHint">{{ t('settings.theme_dark', {}, 'Dark') }}</div>
+              </button>
+            </div>
+          </div>
+
+          <div class="spRow spRow--stack">
+            <div class="spRowLabel">{{ t('settings.chat_wallpaper', {}, 'Chat wallpaper') }}</div>
+            <div class="spWallpapers">
+              <button
+                v-for="w in wallpaperPresets"
+                :key="w.id"
+                type="button"
+                class="spWallpaperTile"
+                :class="{ active: selectedWallpaper === w.id }"
+                :style="{ background: wallpaperPreview(w.id) }"
+                :aria-label="w.id"
+                @click="setWallpaper(w.id)"
+              />
+            </div>
+            <label class="spInline">
+              <span class="spInlineLabel">{{ t('settings.wallpaper_color', {}, 'Wallpaper color') }}</span>
+              <input
+                type="color"
+                class="spColorInput"
+                :value="selectedWallpaperBase"
+                @input="setCustomWallpaperBase(($event.target as HTMLInputElement).value)"
+              />
+            </label>
+          </div>
+
+          <div class="spRow spRow--stack">
+            <div class="spRowLabel">{{ t('settings.accent_color', {}, 'Accent color') }}</div>
+            <div class="spAccents">
+              <button
+                v-for="a in accentPresets"
+                :key="a.id"
+                type="button"
+                class="spAccentDot"
+                :class="{ active: themePrefs.accent === a.id }"
+                :style="{ background: a.id === 'custom' ? (themePrefs.customAccent || a.hex) : a.hex }"
+                :aria-label="a.id"
+                @click="setAccent(a.id)"
+              />
+            </div>
+            <label class="spInline">
+              <span class="spInlineLabel">{{ t('settings.custom', {}, 'Custom') }}</span>
+              <input
+                type="color"
+                class="spColorInput"
+                :value="themePrefs.customAccent || '#4a90d9'"
+                @input="setCustomAccent(($event.target as HTMLInputElement).value)"
+              />
+            </label>
+          </div>
         </section>
       </template>
 
@@ -482,5 +655,175 @@ function handleBack() {
 .spBtn:disabled {
   opacity: .64;
   cursor: default;
+}
+
+.spRow {
+  display: grid;
+  gap: 10px;
+}
+
+.spRow--stack {
+  gap: 12px;
+}
+
+.spRowLabel {
+  font-size: .82rem;
+  font-weight: 800;
+  color: var(--text-soft);
+}
+
+.spPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.spThemeCards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.spThemeCard {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-soft);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.spThemeCard.active {
+  outline: 3px solid rgba(74, 144, 217, 0.22);
+  border-color: rgba(74, 144, 217, 0.28);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+}
+
+.spThemePreview {
+  height: 54px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background-size: cover;
+}
+
+.spThemePreview--light {
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.92), rgba(238, 242, 247, 0.95) 42%),
+    linear-gradient(180deg, #f5f7fb 0%, #edf1f6 100%);
+}
+
+.spThemePreview--dark {
+  background:
+    radial-gradient(circle at top left, rgba(36, 36, 44, 0.92), rgba(11, 11, 12, 0.95) 42%),
+    linear-gradient(180deg, #0b0b0c 0%, #050506 100%);
+}
+
+.spThemeName {
+  font-size: .86rem;
+  font-weight: 900;
+  color: var(--text);
+}
+
+.spThemeHint {
+  margin-top: -6px;
+  font-size: .78rem;
+  font-weight: 800;
+  color: var(--text-muted);
+}
+
+.spPill {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  font-weight: 800;
+  font-size: .84rem;
+  cursor: pointer;
+}
+
+.spPill.active {
+  border-color: rgba(74, 144, 217, 0.38);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.spWallpapers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.spWallpaperTile {
+  height: 54px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.06);
+  cursor: pointer;
+  background-size: cover;
+}
+
+.spWallpaperTile.active {
+  outline: 3px solid rgba(74, 144, 217, 0.28);
+  border-color: rgba(74, 144, 217, 0.32);
+}
+
+.spAccents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.spAccentDot {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 2px solid var(--surface-strong);
+  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.08);
+  cursor: pointer;
+}
+
+.spAccentDot.active {
+  outline: 3px solid rgba(74, 144, 217, 0.22);
+}
+
+.spInline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.spInlineLabel {
+  font-size: .82rem;
+  font-weight: 800;
+  color: var(--text-soft);
+}
+
+.spColorInput {
+  width: 44px;
+  height: 32px;
+  border-radius: 12px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .spThemeCards {
+    grid-template-columns: 1fr;
+  }
+  .spWallpapers {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 </style>

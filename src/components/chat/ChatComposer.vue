@@ -3,6 +3,7 @@ import type { GIFItem } from 'combox-api'
 import { defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from '../../i18n/i18n'
 import type { PendingFile } from '../../models/chat'
+import LinkPreviewCard from './LinkPreviewCard.vue'
 import PendingMediaTile from './PendingMediaTile.vue'
 import type { ViewMessage } from './chatTypes'
 
@@ -34,8 +35,41 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const draft = ref('')
 const pickerOpen = ref(false)
+const dismissedPreviewUrl = ref('')
 let pickerPrefetchStarted = false
 type IdleCallbackHandle = Window & { requestIdleCallback?: (cb: () => void) => number }
+
+const URL_RE = /\b((?:https?:\/\/|www\.)[^\s<>"'`]+)\b/i
+
+function normalizeUrl(raw: string): string {
+  const trimmed = (raw || '').trim()
+  if (!trimmed) return ''
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+}
+
+function extractFirstUrl(text: string): string {
+  if (!text) return ''
+  const match = text.match(URL_RE)
+  if (!match?.[1]) return ''
+  return normalizeUrl(match[1].replace(/[.,!?;:)\]}]+$/, ''))
+}
+
+function noPreviewToken(url: string): string {
+  return `[[nopreview:${encodeURIComponent(url)}]]`
+}
+
+const detectedUrl = ref('')
+watch(
+  draft,
+  () => {
+    detectedUrl.value = extractFirstUrl(draft.value)
+    if (dismissedPreviewUrl.value && dismissedPreviewUrl.value !== detectedUrl.value) {
+      // If URL changed, allow preview again for the new URL.
+      dismissedPreviewUrl.value = ''
+    }
+  },
+  { immediate: true },
+)
 
 function prefetchPicker() {
   if (pickerPrefetchStarted) return
@@ -61,6 +95,7 @@ watch(
   () => {
     draft.value = ''
     pickerOpen.value = false
+    dismissedPreviewUrl.value = ''
     nextTick(resizeTextarea)
   },
 )
@@ -80,9 +115,14 @@ watch(
 )
 
 function handleSend() {
-  emit('send', draft.value)
+  let outgoing = draft.value
+  if (detectedUrl.value && dismissedPreviewUrl.value === detectedUrl.value) {
+    outgoing = [outgoing, noPreviewToken(detectedUrl.value)].filter(Boolean).join('\n')
+  }
+  emit('send', outgoing)
   if (!props.sending) {
     draft.value = ''
+    dismissedPreviewUrl.value = ''
     nextTick(resizeTextarea)
   }
 }
@@ -159,6 +199,15 @@ onBeforeUnmount(() => {
       <PendingMediaTile v-for="item in pendingFiles" :key="item.id" :item="item" @remove="emit('removePendingFile', $event)" />
     </div>
 
+    <LinkPreviewCard
+      v-if="detectedUrl && dismissedPreviewUrl !== detectedUrl"
+      class="composerLinkPreview"
+      :url="detectedUrl"
+      :media-overlay-open="false"
+      dismissible
+      @dismiss="dismissedPreviewUrl = $event"
+    />
+
     <div class="composerRow" :aria-disabled="disabled ? 'true' : 'false'">
       <button
         type="button"
@@ -209,7 +258,6 @@ onBeforeUnmount(() => {
         type="file"
         hidden
         multiple
-        accept="image/*,video/*"
         @change="handleFileChange"
       />
     </div>
@@ -241,6 +289,10 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+.composerLinkPreview {
+  margin: 0 8px;
+}
+
 .replyBar {
   display: flex;
   align-items: flex-start;
@@ -250,7 +302,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-left: 3px solid rgba(74, 144, 217, 0.7);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface);
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
 }
 
@@ -297,7 +349,7 @@ onBeforeUnmount(() => {
   min-height: 54px;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--surface);
   border-radius: 22px;
   box-shadow: var(--shadow-soft);
 }
