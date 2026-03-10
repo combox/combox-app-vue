@@ -1,0 +1,144 @@
+name: Build and Push Docker image (Docker Hub)
+
+on:
+  release:
+    types: [published]
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Docker image tag to publish (e.g. v1.2.3)
+        required: true
+        type: string
+      push_latest:
+        description: Also push :latest
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/combox-app-vue
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: combox-app-vue
+
+      - name: Checkout API dependency
+        uses: actions/checkout@v4
+        with:
+          repository: combox/combox-api
+          path: combox-api
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve tags
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+            PUSH_LATEST=true
+          else
+            TAG="${{ inputs.tag }}"
+            PUSH_LATEST="${{ inputs.push_latest }}"
+          fi
+
+          TAGS="${IMAGE_NAME}:${TAG}"
+          if [[ "${PUSH_LATEST}" == "true" ]]; then
+            TAGS="${TAGS},${IMAGE_NAME}:latest"
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+          PRIMARY_TAG="${IMAGE_NAME}:${TAG}"
+          echo "primary_tag=${PRIMARY_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: combox-app-vue
+          file: combox-app-vue/Dockerfile
+          build-contexts: |
+            combox_api=./combox-api
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Write image metadata (release)
+        if: ${{ github.event_name == 'release' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          {
+            echo "image=${IMAGE_NAME}"
+            echo "tags=${{ steps.meta.outputs.tags }}"
+            echo "primary_tag=${{ steps.meta.outputs.primary_tag }}"
+            echo "digest=${{ steps.build.outputs.digest }}"
+            echo "pulled_as=${{ steps.meta.outputs.primary_tag }}@${{ steps.build.outputs.digest }}"
+          } > dist/docker-image.txt
+
+      - name: Upload metadata to GitHub Release
+        if: ${{ github.event_name == 'release' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/docker-image.txt
+
+      - name: Update GitHub Release notes with Docker pull snippet
+        if: ${{ github.event_name == 'release' }}
+        uses: actions/github-script@v7
+        env:
+          DOCKERHUB_URL: https://hub.docker.com/r/${{ env.IMAGE_NAME }}
+        with:
+          script: |
+            const release = context.payload.release;
+            const primaryTag = `${{ steps.meta.outputs.primary_tag }}`;
+            const digest = `${{ steps.build.outputs.digest }}`;
+            const dockerHubUrl = process.env.DOCKERHUB_URL;
+
+            const snippet = [
+              "\n\n---\n\n## Docker image\n",
+              `Docker Hub: ${dockerHubUrl}\n`,
+              "\nPull:\n",
+              "```bash\n",
+              `docker pull ${primaryTag}\n`,
+              "```\n",
+              "\nPull by digest (immutable):\n",
+              "```bash\n",
+              `docker pull ${primaryTag}@${digest}\n`,
+              "```\n",
+            ].join("");
+
+            const body = (release.body || "") + snippet;
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              body,
+            });
