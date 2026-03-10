@@ -3,6 +3,10 @@ dist/
 build/
 coverage/
 .cache/
+.npm-cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 playwright-report/
 test-results/
 *.tsbuildinfo
