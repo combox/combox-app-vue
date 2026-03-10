@@ -17,12 +17,12 @@ jobs:
 
     steps:
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: combox-app-vue
 
       - name: Checkout local API dependency
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: combox/combox-api
           path: combox-api
