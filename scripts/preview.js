@@ -76,11 +76,6 @@ async function readFileSafe(absPath) {
   }
 }
 
-function makeEtag(st) {
-  // Weak etag is enough for preview and helps Lighthouse audits.
-  return `W/\"${st.size}-${Math.trunc(st.mtimeMs)}\"`
-}
-
 function isCompressibleExt(ext) {
   return [
     '.html',
