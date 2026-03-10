@@ -1,8 +1,14 @@
-DC := docker compose -f docker-compose.yml
-EDGE_DC := docker compose -f docker-compose.edge.yml
-EDGE_DEV_DC := docker compose -f docker-compose.edge.yml -f docker-compose.edge.dev.yml
+CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
+PODMAN := $(findstring podman,$(CONTAINER))
+BUILD_FLAGS :=
+ifneq ($(PODMAN),)
+BUILD_FLAGS := --format docker
+endif
+DC := $(CONTAINER) compose -f docker-compose.yml
+EDGE_DC := $(CONTAINER) compose -f docker-compose.edge.yml
+EDGE_DEV_DC := $(CONTAINER) compose -f docker-compose.edge.yml -f docker-compose.edge.dev.yml
 
-.PHONY: up down rebuild logs ps check test-e2e edge-up edge-dev edge-down edge-logs edge-dev-logs commit
+.PHONY: up down rebuild logs ps check test-e2e edge-up edge-dev edge-down edge-logs edge-dev-logs docker-build docker-run commit
 
 up:
 	$(DC) up -d combox-app
@@ -45,6 +51,12 @@ edge-logs:
 
 edge-dev-logs:
 	$(EDGE_DEV_DC) logs -f --tail=120 combox-app-vue
+
+docker-build:
+	$(CONTAINER) build $(BUILD_FLAGS) -t combox-app-vue:dev .
+
+docker-run:
+	$(CONTAINER) run --rm -p 4173:4173 combox-app-vue:dev
 
 commit:
 	node scripts/commit.js "$(branch)" "$(message)"
