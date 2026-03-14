@@ -55,6 +55,28 @@ html[data-theme='dark'] {
     linear-gradient(180deg, #0b0b0c 0%, #050506 100%);
 }
 
+html[data-theme='dark'] input,
+html[data-theme='dark'] textarea,
+html[data-theme='dark'] select {
+  color: var(--text);
+  caret-color: var(--text);
+}
+
+html[data-theme='dark'] input::placeholder,
+html[data-theme='dark'] textarea::placeholder {
+  color: var(--text-muted);
+}
+
+html[data-theme='dark'] .v-field__input,
+html[data-theme='dark'] .v-label,
+html[data-theme='dark'] .v-field-label {
+  color: var(--text) !important;
+}
+
+html[data-theme='dark'] .v-field__input::placeholder {
+  color: var(--text-muted) !important;
+}
+
 /* cyrillic */
 @font-face {
   font-family: 'Roboto';

@@ -18,6 +18,7 @@ const emit = defineEmits<{
   closeContextMenu: []
   copyContextMessage: []
   replyContextMessage: []
+  forwardContextMessage: []
   editContextMessage: []
   deleteContextMessage: []
   openContextReactionPicker: []
@@ -29,6 +30,7 @@ const emit = defineEmits<{
   openUsername: [username: string]
   replyToMessage: [message: ViewMessage]
   openDiscussion: [message: ViewMessage]
+  forwardSelectedMessages: [messages: ViewMessage[]]
 }>()
 
 const { t } = useI18n()
@@ -79,6 +81,38 @@ const mediaQueue = getSharedMediaLazyQueue()
 let scrollUnlockTimer: number | null = null
 let scrollRafPending = false
 let lastScrollContainer: HTMLElement | null = null
+
+const selectionMode = ref(false)
+const selectedMessageIds = ref<Set<string>>(new Set())
+
+const selectedMessages = computed(() => {
+  const ids = selectedMessageIds.value
+  if (!selectionMode.value || ids.size === 0) return []
+  return props.messages.filter((m) => ids.has(String(m.raw.id || '').trim()))
+})
+
+function clearSelection() {
+  selectionMode.value = false
+  selectedMessageIds.value = new Set()
+}
+
+function toggleSelectMessage(message: ViewMessage) {
+  const id = String(message.raw.id || '').trim()
+  if (!id) return
+  if (!selectionMode.value) selectionMode.value = true
+  const next = new Set(selectedMessageIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedMessageIds.value = next
+  if (selectedMessageIds.value.size === 0) selectionMode.value = false
+}
+
+function forwardSelection() {
+  const list = selectedMessages.value
+  if (list.length === 0) return
+  emit('forwardSelectedMessages', list)
+  clearSelection()
+}
 
 function lockMediaDuringScroll() {
   mediaQueue.lock()
@@ -141,10 +175,28 @@ function scrollToBottom(force = false) {
 
 function emitMarkRead() {
   if (!props.selectedChatID || !isNearBottom.value) return
-  const ids = props.messages
+  const unread = props.messages
     .filter((message) => message.raw.user_id && message.raw.user_id !== props.currentUserId)
-    .map((message) => message.raw.id)
-    .filter(Boolean)
+    .map((message) => ({ id: String(message.raw.id || '').trim(), chatID: String(message.raw.chat_id || '').trim() }))
+    .filter((item) => item.id)
+
+  if (unread.length === 0) return
+
+  if (props.discussionMode) {
+    const byChat = new Map<string, string[]>()
+    for (const item of unread) {
+      const chatID = item.chatID || props.selectedChatID
+      const list = byChat.get(chatID) ?? []
+      list.push(item.id)
+      byChat.set(chatID, list)
+    }
+    for (const [chatID, ids] of byChat.entries()) {
+      if (ids.length > 0) emit('markRead', { chatID, messageIDs: ids })
+    }
+    return
+  }
+
+  const ids = unread.map((item) => item.id)
   if (ids.length > 0) emit('markRead', { chatID: props.selectedChatID, messageIDs: ids })
 }
 
@@ -390,6 +442,20 @@ watch(
 
 <template>
   <div class="messageListWrap">
+    <div v-if="selectionMode" class="selBar" @click.stop>
+      <div class="selCount">{{ selectedMessageIds.size }} {{ t('chat.selected', undefined, 'selected') }}</div>
+      <div class="selActions">
+        <button type="button" class="selBtn" @click="forwardSelection">
+          <v-icon icon="mdi-forward" size="18" />
+          <span>{{ t('chat.forward', undefined, 'Forward') }}</span>
+        </button>
+        <button type="button" class="selBtn muted" @click="clearSelection">
+          <v-icon icon="mdi-close" size="18" />
+          <span>{{ t('common.cancel', undefined, 'Cancel') }}</span>
+        </button>
+      </div>
+    </div>
+
     <section ref="containerRef" class="messageList" @scroll="onScroll">
       <v-alert v-if="errorText" type="error" density="compact" variant="tonal" class="ma-3">{{ errorText }}</v-alert>
 
@@ -462,9 +528,9 @@ watch(
             :avatar-by-user-id="avatarByUserId"
             :sender-name-by-user-id="senderNameByUserId"
             :sender-role-by-user-id="senderRoleByUserId"
-            :show-sender-meta="Boolean(comment.raw.user_id && comment.raw.user_id !== currentUserId)"
-            :show-sender-avatar="Boolean(comment.raw.user_id && comment.raw.user_id !== currentUserId)"
-            :reserve-avatar-space="Boolean(comment.raw.user_id && comment.raw.user_id !== currentUserId)"
+            :show-sender-meta="true"
+            :show-sender-avatar="true"
+            :reserve-avatar-space="true"
             :is-public-channel="false"
             :comments-enabled="false"
             :can-comment="false"
@@ -515,6 +581,8 @@ watch(
           :can-react="canReact"
           :is-top-level-post="Boolean(isPublicChannel) && !(thread.post.raw.reply_to_message_id || '').trim()"
           :comment-count="thread.comments.length"
+          :selection-mode="selectionMode"
+          :selected="selectedMessageIds.has(String(thread.post.raw.id || '').trim())"
           @open-image="$emit('openImage', $event)"
           @open-video="$emit('openVideo', $event)"
           @open-user-info="$emit('openUserInfo', $event)"
@@ -523,6 +591,7 @@ watch(
           @open-discussion="$emit('openDiscussion', $event)"
           @react="$emit('react', $event)"
           @open-context-menu="$emit('openContextMenu', $event)"
+          @toggle-select="toggleSelectMessage"
           @jump-to-message="jumpToMessage"
         />
       </div>
@@ -542,9 +611,19 @@ watch(
     :show-delete="canDeleteContextMessage"
     :show-edit="canEditContextMessage"
     :show-react="canReact"
+    :views-count="(() => {
+      const raw = (contextMenu?.message?.raw || {}) as any
+      const candidates = [raw?.views_count, raw?.view_count, raw?.views, raw?.seen_count, raw?.seen]
+      for (const value of candidates) {
+        const n = typeof value === 'number' ? value : Number(String(value || '').trim())
+        if (Number.isFinite(n) && n > 0) return n
+      }
+      return 0
+    })()"
     @close="$emit('closeContextMenu')"
     @copy="$emit('copyContextMessage')"
     @reply="$emit('replyContextMessage')"
+    @forward="$emit('forwardContextMessage')"
     @edit="$emit('editContextMessage')"
     @delete="$emit('deleteContextMessage')"
     @react="
@@ -583,6 +662,55 @@ watch(
   position: relative;
   height: 100%;
   min-height: 0;
+}
+
+.selBar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.selCount {
+  font-weight: 800;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.selActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.selBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-weight: 800;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.selBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.selBtn.muted {
+  background: transparent;
+  color: var(--text-muted);
 }
 
 .messageList {

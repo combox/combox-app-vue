@@ -49,6 +49,7 @@ export function setupWorkspaceGroupState(input: GroupStateInput) {
   }
 
   const initialSelection = resolveInitialSelection()
+
   const selectedGroupChannelByGroupId = ref<Record<string, string>>(initialSelection.selectedGroupChannels)
   const groupChannelsByGroupID = ref<Record<string, ChatItem[]>>(cachedGroupChannelsByGroupID)
   const groupChannelsOpen = ref(
@@ -65,18 +66,22 @@ export function setupWorkspaceGroupState(input: GroupStateInput) {
     const groupID = activeGroupID.value
     if (!groupID) return ''
     const channelID = (selectedGroupChannelByGroupId.value[groupID] || '').trim()
-    return channelID || groupID
+    return channelID
   })
 
-  const activeMessagesChatID = computed(() => {
+  const rawActiveMessagesChatID = computed(() => {
     const active = input.selectedChat.value
     if (!active) return ''
     const kind = (active.kind || '').trim()
-    if (kind !== 'group') return active.id
-    const groupID = active.id
+    if (kind !== 'group') return (active.id || '').trim()
+    const groupID = (active.id || '').trim()
     const channelID = (selectedGroupChannelByGroupId.value[groupID] || '').trim()
+    // When browsing a group, show the topics pane only until a topic is picked.
+    if (groupChannelsOpen.value && !channelID) return ''
     return channelID || groupID
   })
+
+  const activeMessagesChatID = computed(() => (rawActiveMessagesChatID.value || '').trim())
 
   function getLastCachedMessageContent(chatIDRaw: string): string {
     const chatID = (chatIDRaw || '').trim()
@@ -148,7 +153,8 @@ export function setupWorkspaceGroupState(input: GroupStateInput) {
     const groupID = (groupIDRaw || '').trim()
     const topicNumber = Number(topicNumberRaw || 0)
     if (!groupID) return ''
-    if (!Number.isInteger(topicNumber) || topicNumber <= 1) return groupID
+    if (!Number.isInteger(topicNumber) || topicNumber <= 0) return ''
+    if (topicNumber <= 1) return groupID
     const match = (groupChannelsByGroupID.value[groupID] || []).find((item) => Number(item.topic_number || 0) === topicNumber)
     return (match?.id || '').trim() || groupID
   }
@@ -157,7 +163,8 @@ export function setupWorkspaceGroupState(input: GroupStateInput) {
     const groupID = (groupIDRaw || '').trim()
     const channelID = (channelIDRaw || '').trim()
     if (!groupID) return null
-    if (!channelID || channelID === groupID) return 1
+    if (!channelID) return null
+    if (channelID === groupID) return 1
     const match = (groupChannelsByGroupID.value[groupID] || []).find((item) => (item.id || '').trim() === channelID)
     const topicNumber = Number(match?.topic_number || 0)
     return Number.isInteger(topicNumber) && topicNumber > 0 ? topicNumber : null

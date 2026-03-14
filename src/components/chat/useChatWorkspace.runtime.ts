@@ -132,6 +132,7 @@ export function useChatWorkspace() {
   const processedIncomingMessageIDs = ref(new Set<string>())
   const wsConnected = ref(false)
   const presenceByUserId = ref<Record<string, PresenceItem>>({})
+  const realtimeExtraChatIDs = ref<string[]>([])
   const {
     selectedChat,
     directPeerId,
@@ -239,6 +240,7 @@ export function useChatWorkspace() {
 
   const { start, stop, sendRequest, sendEvent } = useChatRealtime({
     getSelectedChatID: () => activeMessagesChatID.value,
+    getAdditionalChatIDs: () => realtimeExtraChatIDs.value,
     reloadChats: async () => {
       await loadChats()
       await loadNotifications()
@@ -567,7 +569,7 @@ export function useChatWorkspace() {
     normalizePeerProfile,
   })
 
-  setupWorkspaceLifecycle({
+  const _runtime = setupWorkspaceLifecycle({
     chats,
     selectedChatID,
     selectedGroupChannelID,
@@ -597,17 +599,20 @@ export function useChatWorkspace() {
     parseMessageContent,
     getAttachment,
   })
+  void _runtime
 
   return {
     currentUser,
     localProfile,
     selectedChatID,
+    activeMessagesChatID,
     selectedChat,
     hasActiveChat,
     chats,
     filteredChats,
     messages,
     filteredMessages,
+    rawMessages,
     sidebarSearch,
     selectedFilterTab,
     messageSearchOpen,
@@ -624,6 +629,7 @@ export function useChatWorkspace() {
     replyToMessage,
     editingMessage,
     pendingFiles,
+    urlsByAttachment,
     uploadProgress,
     directoryQuery,
     directoryResults,
@@ -648,9 +654,11 @@ export function useChatWorkspace() {
     activeGroupID,
     showGroupChannelsPanel,
     selectedGroupChannelID,
+    selectedGroupChannelByGroupId,
     visibleGroupChannels,
     loadingGroupChannels,
     wsConnected,
+    realtimeExtraChatIDs,
     setChatFilter,
     selectChat,
     selectDirectoryChat,
@@ -706,6 +714,12 @@ export function useChatWorkspace() {
     subscribeSelectedChannel,
     unsubscribeSelectedChannel,
     createSelectedChatInviteLink,
+    loadChats,
+    loadGroupChannels,
+    loadMessages,
+    persistGroupSelection,
+    clearHash,
     sendRequest,
+    sendEvent,
   }
 }

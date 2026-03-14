@@ -29,6 +29,11 @@ export function setupWorkspaceComputed(input: SetupWorkspaceComputedInput) {
     // Group "topics"/channels have a parent group id; they should not appear in the main chat list.
     return Boolean((chat.parent_chat_id || '').trim())
   }
+  const isDirectChat = (chat: ChatItem): boolean => {
+    const kind = (chat.kind || '').trim()
+  if (kind === 'standalone_channel') return false
+    return Boolean(chat.is_direct)
+  }
 
   const selectedChat = computed(() => input.chats.value.find((chat) => chat.id === input.selectedChatID.value) || input.invitePreviewChat.value || null)
   const directPeerId = computed(() => (selectedChat.value?.is_direct ? (selectedChat.value?.peer_user_id || '').trim() : ''))
@@ -44,8 +49,8 @@ export function setupWorkspaceComputed(input: SetupWorkspaceComputedInput) {
       .filter((chat) => !isGroupChannel(chat))
       .filter((chat) => {
         if (input.chatFilter.value === 'all') return true
-        if (input.chatFilter.value === 'direct') return chat.is_direct
-        return !chat.is_direct
+        if (input.chatFilter.value === 'direct') return isDirectChat(chat)
+        return !isDirectChat(chat)
       })
     if (!q || q.startsWith('@')) return byType
     return byType.filter((chat) => chat.title.toLowerCase().includes(q))
@@ -58,7 +63,7 @@ export function setupWorkspaceComputed(input: SetupWorkspaceComputedInput) {
       const unread = Math.max(0, input.unreadByChatId.value[chat.id] || 0)
       if (!unread || input.mutedChatIDs.value[chat.id]) continue
       all += 1
-      if (chat.is_direct) direct += 1
+      if (isDirectChat(chat)) direct += 1
       else group += 1
     }
     return { all, direct, group }

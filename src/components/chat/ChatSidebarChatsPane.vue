@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { ChatItem, SearchResults, SearchUserResult } from 'combox-api'
 import { firstPreviewAttachmentId, normalizeAvatarSrc, summarizeMessagePreview } from './chatUtils'
 import type { AttachmentThumb } from './chatSidebar.types'
@@ -23,6 +24,7 @@ const props = defineProps<{
   createMenuOpen: boolean
   canCreateChannel: boolean
   lastAttachmentPreviewById: Record<string, AttachmentThumb>
+  mutedChatIDs: Record<string, boolean>
 }>()
 
 const emit = defineEmits<{
@@ -36,9 +38,70 @@ const emit = defineEmits<{
   (e: 'select-chat', chatID: string): void
   (e: 'select-directory-chat', chat: SearchResults['chats'][number]): void
   (e: 'select-directory-user', user: SearchUserResult): void
+  (e: 'chat-context-mute', chat: ChatItem): void
+  (e: 'chat-context-leave', chat: ChatItem): void
+  (e: 'chat-context-delete', chat: ChatItem): void
 }>()
 
 const { t } = useI18n()
+
+type ChatContextMenuState = { open: boolean; x: number; y: number; chat: ChatItem | null }
+const chatContextMenu = ref<ChatContextMenuState>({ open: false, x: 0, y: 0, chat: null })
+const rootEl = ref<HTMLElement | null>(null)
+const ctxMenuEl = ref<HTMLElement | null>(null)
+
+function openChatContextMenu(event: MouseEvent, chat: ChatItem) {
+  event.preventDefault()
+  event.stopPropagation()
+  chatContextMenu.value = { open: true, x: event.clientX, y: event.clientY, chat }
+  void queueMicrotask(() => clampContextMenuIntoRoot())
+}
+
+function closeChatContextMenu() {
+  chatContextMenu.value = { open: false, x: 0, y: 0, chat: null }
+}
+
+function clampContextMenuIntoRoot() {
+  const root = rootEl.value
+  const menu = ctxMenuEl.value
+  if (!root || !menu || !chatContextMenu.value.open) return
+
+  const padding = 8
+  const rootRect = root.getBoundingClientRect()
+  const menuRect = menu.getBoundingClientRect()
+
+  const minLeft = rootRect.left + padding
+  const maxLeft = Math.max(minLeft, rootRect.right - menuRect.width - padding)
+  const minTop = rootRect.top + padding
+  const maxTop = Math.max(minTop, rootRect.bottom - menuRect.height - padding)
+
+  const nextLeft = Math.min(Math.max(chatContextMenu.value.x, minLeft), maxLeft)
+  const nextTop = Math.min(Math.max(chatContextMenu.value.y, minTop), maxTop)
+
+  if (nextLeft !== chatContextMenu.value.x || nextTop !== chatContextMenu.value.y) {
+    chatContextMenu.value = { ...chatContextMenu.value, x: nextLeft, y: nextTop }
+  }
+}
+
+function isChatMuted(chatID: string) {
+  return Boolean(props.mutedChatIDs?.[chatID])
+}
+
+function canDeleteChat(chat: ChatItem) {
+  if ((chat.viewer_role || '').trim() !== 'owner') return false
+  const kind = (chat.kind || '').trim()
+  const parentID = (chat.parent_chat_id || '').trim()
+  if (kind === 'standalone_channel' || kind === 'group') return true
+  return kind === 'channel' && Boolean(parentID)
+}
+
+function deleteLabel(chat: ChatItem) {
+  const kind = (chat.kind || '').trim()
+  if (kind === 'group') return t('chat.delete_group', undefined, 'Delete group')
+  if (kind === 'standalone_channel') return t('chat.delete_channel', undefined, 'Delete channel')
+  if (kind === 'channel') return t('chat.delete_topic', undefined, 'Delete topic')
+  return t('chat.delete_chat', undefined, 'Delete chat')
+}
 
 function chatPreview(chat: ChatItem): string {
   return summarizeMessagePreview(chat.last_message_preview || '', {
@@ -55,6 +118,11 @@ function firstAttachmentThumb(chat: ChatItem): string {
   const attachmentID = firstPreviewAttachmentId(chat.last_message_preview || '')
   if (!attachmentID) return ''
   return props.lastAttachmentPreviewById[attachmentID]?.preview_url || props.lastAttachmentPreviewById[attachmentID]?.url || ''
+}
+
+function searchChatAvatarSrc(chat: SearchResults['chats'][number]): string {
+  const raw = (chat && typeof chat === 'object' ? chat : {}) as Record<string, unknown>
+  return normalizeAvatarSrc(String(raw.avatar_data_url || ''))
 }
 
 function formatDate(value: string): string {
@@ -78,10 +146,37 @@ function formatDate(value: string): string {
       : { day: 'numeric', month: 'short', year: '2-digit' })
   }
 }
+
+function chatViewsCount(chat: ChatItem): number {
+  const raw = chat as Record<string, unknown>
+  const lastMessage = (raw.last_message && typeof raw.last_message === 'object'
+    ? raw.last_message
+    : {}) as Record<string, unknown>
+  const candidates = [
+    lastMessage.views_count,
+    lastMessage.view_count,
+    lastMessage.views,
+    lastMessage.seen_count,
+    lastMessage.seen,
+    raw.last_message_views_count,
+    raw.last_message_view_count,
+    raw.last_message_views,
+    raw.views_count,
+    raw.view_count,
+    raw.views,
+    raw.seen_count,
+    raw.seen,
+  ]
+  for (const value of candidates) {
+    const n = typeof value === 'number' ? value : Number(String(value || '').trim())
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return 0
+}
 </script>
 
 <template>
-  <div class="cpRoot" :class="{ compact }">
+  <div ref="rootEl" class="cpRoot" :class="{ compact }">
     <template v-if="compact">
       <div class="cpShelfHeader">
         <button type="button" class="cpIconBtn" :aria-label="t('chat.menu')" @click="emit('open-settings')">
@@ -164,7 +259,7 @@ function formatDate(value: string): string {
 
           <div v-if="directoryResults.chats.length > 0" class="cpSubheader">{{ t('chat.public_chats') }}</div>
           <button v-for="chat in directoryResults.chats" :key="`c:${chat.id}`" type="button" class="cpItem" @click="emit('select-directory-chat', chat)">
-            <img v-if="normalizeAvatarSrc((chat as any).avatar_data_url || '')" class="cpAvatarImg" :src="normalizeAvatarSrc((chat as any).avatar_data_url || '')" :alt="chat.title" />
+            <img v-if="searchChatAvatarSrc(chat)" class="cpAvatarImg" :src="searchChatAvatarSrc(chat)" :alt="chat.title" />
             <div v-else class="cpAvatar">{{ chat.title.slice(0, 1).toUpperCase() }}</div>
             <div class="cpMain">
               <div class="cpPrimary">{{ chat.title }}</div>
@@ -174,29 +269,59 @@ function formatDate(value: string): string {
         </template>
 
         <template v-else>
-          <button
-            v-for="chat in chats"
-            :key="chat.id"
-            type="button"
-            class="cpItem chatlist-chat"
-            :class="{ selected: chat.id === selectedChatID }"
-            @click="emit('select-chat', chat.id)"
-          >
-            <img v-if="normalizeAvatarSrc(chat.avatar_data_url || '')" class="cpAvatarImg" :src="normalizeAvatarSrc(chat.avatar_data_url || '')" :alt="chat.title" />
-            <div v-else class="cpAvatar">{{ chat.title.slice(0, 1).toUpperCase() }}</div>
-            <div class="cpMain">
-              <div class="cpPrimary">{{ chat.title }}</div>
-              <div class="cpSecondaryWrap">
-                <img v-if="firstAttachmentThumb(chat)" class="cpThumb" :src="firstAttachmentThumb(chat)" alt="attachment" />
-                <span class="cpSecondary">{{ chatPreview(chat) }}</span>
+          <TransitionGroup name="chatRow" tag="div" class="cpChatItems">
+            <button
+              v-for="chat in chats"
+              :key="chat.id"
+              type="button"
+              class="cpItem chatlist-chat"
+              :class="{ selected: chat.id === selectedChatID }"
+              @click="emit('select-chat', chat.id)"
+              @contextmenu="openChatContextMenu($event, chat)"
+            >
+              <img v-if="normalizeAvatarSrc(chat.avatar_data_url || '')" class="cpAvatarImg" :src="normalizeAvatarSrc(chat.avatar_data_url || '')" :alt="chat.title" />
+              <div v-else class="cpAvatar">{{ chat.title.slice(0, 1).toUpperCase() }}</div>
+              <div class="cpMain">
+                <div class="cpPrimary">{{ chat.title }}</div>
+                <div class="cpSecondaryWrap">
+                  <img v-if="firstAttachmentThumb(chat)" class="cpThumb" :src="firstAttachmentThumb(chat)" alt="attachment" />
+                  <span class="cpSecondary">{{ chatPreview(chat) }}</span>
+                </div>
               </div>
-            </div>
-            <div class="cpMeta">
-              <div class="cpDate">{{ formatDate(chat.created_at) }}</div>
-              <span v-if="(unreadByChatId[chat.id] || 0) > 0" class="cpUnread">{{ unreadByChatId[chat.id] > 99 ? '99+' : unreadByChatId[chat.id] }}</span>
-            </div>
-          </button>
+              <div class="cpMeta">
+                <div class="cpDate">{{ formatDate(chat.created_at) }}</div>
+                <div v-if="chatViewsCount(chat) > 0" class="cpViews">
+                  <v-icon icon="mdi-eye-outline" size="14" class="cpViewsIcon" />
+                  <span>{{ chatViewsCount(chat) }}</span>
+                </div>
+                <span v-if="(unreadByChatId[chat.id] || 0) > 0" class="cpUnread">{{ unreadByChatId[chat.id] > 99 ? '99+' : unreadByChatId[chat.id] }}</span>
+              </div>
+            </button>
+          </TransitionGroup>
         </template>
+      </div>
+
+      <div v-if="chatContextMenu.open" class="cpCtxOverlay" @click="closeChatContextMenu" />
+      <div
+        v-if="chatContextMenu.open && chatContextMenu.chat"
+        ref="ctxMenuEl"
+        class="cpCtxMenu"
+        :style="{ left: `${chatContextMenu.x}px`, top: `${chatContextMenu.y}px` }"
+      >
+        <button type="button" class="cpCtxItem" @click="emit('chat-context-mute', chatContextMenu.chat); closeChatContextMenu()">
+          {{ isChatMuted(chatContextMenu.chat.id) ? t('chat.unmute', undefined, 'Unmute') : t('chat.mute', undefined, 'Mute') }}
+        </button>
+        <button type="button" class="cpCtxItem" @click="emit('chat-context-leave', chatContextMenu.chat); closeChatContextMenu()">
+          {{ t('chat.leave', undefined, 'Leave') }}
+        </button>
+        <button
+          v-if="canDeleteChat(chatContextMenu.chat)"
+          type="button"
+          class="cpCtxItem danger"
+          @click="emit('chat-context-delete', chatContextMenu.chat); closeChatContextMenu()"
+        >
+          {{ deleteLabel(chatContextMenu.chat) }}
+        </button>
       </div>
     </template>
   </div>
@@ -258,6 +383,34 @@ function formatDate(value: string): string {
   box-shadow: var(--shadow-soft);
   padding: 4px 0;
 }
+
+/* ── Chat context menu ── */
+.cpCtxOverlay { position: fixed; inset: 0; z-index: 20; background: transparent; }
+.cpCtxMenu {
+  position: fixed;
+  z-index: 21;
+  min-width: 180px;
+  max-width: 240px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+  padding: 6px;
+}
+.cpCtxItem {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 10px 10px;
+  border-radius: 10px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+}
+.cpCtxItem:hover { background: var(--surface-soft); }
+.cpCtxItem.danger { color: #ff6b6b; }
+.cpCtxItem.danger:hover { background: rgba(255, 107, 107, 0.12); }
 .cpCreateItem {
   width: 100%; min-height: 34px; padding: 0 12px;
   border: 0; background: transparent; text-align: left;
@@ -301,6 +454,40 @@ function formatDate(value: string): string {
 .cpSubheader { padding: 6px 14px 4px; font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
 .cpEmpty { padding: 16px 14px; color: var(--text-muted); font-size: 14px; }
 
+.cpChatItems {
+  display: block;
+}
+
+.chatRow-move,
+.chatRow-enter-active,
+.chatRow-leave-active {
+  transition: transform 200ms ease, opacity 140ms ease;
+  will-change: transform, opacity;
+}
+
+.chatRow-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 6px, 0);
+}
+
+.chatRow-leave-to {
+  opacity: 0;
+  transform: translate3d(0, -6px, 0);
+}
+
+.chatRow-leave-active {
+  position: absolute;
+  width: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chatRow-move,
+  .chatRow-enter-active,
+  .chatRow-leave-active {
+    transition: none;
+  }
+}
+
 /* Chat row — Telegram-style: 54px avatar, proper spacing */
 .cpItem {
   width: 100%; margin: 0;
@@ -316,7 +503,11 @@ function formatDate(value: string): string {
   min-height: 72px;
 }
 .cpItem:hover { background: rgba(0,0,0,.04); }
-.cpItem.selected { background: var(--surface-selected); }
+.cpItem.selected {
+  background: color-mix(in srgb, var(--accent) 26%, rgba(0,0,0,.18));
+}
+.cpItem.selected .cpPrimary { color: var(--accent-strong); }
+.cpItem.selected .cpSecondary { color: var(--text-soft); }
 
 /* Avatar */
 .cpAvatarImg, .cpAvatar {
@@ -357,6 +548,20 @@ function formatDate(value: string): string {
   background: var(--accent); color: #fff;
   font-size: 12px; font-weight: 600;
   display: inline-grid; place-items: center; padding: 0 6px;
+}
+
+.cpViews {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.cpViewsIcon {
+  color: var(--text-muted);
+  opacity: 0.9;
 }
 
 /* ── Shelf (compact) mode ── */

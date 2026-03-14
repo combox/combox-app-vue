@@ -25,7 +25,8 @@ export function createChannelActions(input: WorkspaceActionsInput) {
   async function subscribeSelectedChannel() {
     const active = input.selectedChat.value
     const chatID = (active?.id || '').trim()
-    if (!chatID || (active?.kind || '').trim() !== 'standalone_channel') return
+    const kind = (active?.kind || '').trim()
+  if (!chatID || kind !== 'standalone_channel') return
     try {
       const payload = await subscribeChannel(chatID)
       const currentCount = Number(active?.subscriber_count || 0)
@@ -48,7 +49,8 @@ export function createChannelActions(input: WorkspaceActionsInput) {
   async function unsubscribeSelectedChannel() {
     const active = input.selectedChat.value
     const chatID = (active?.id || '').trim()
-    if (!chatID || (active?.kind || '').trim() !== 'standalone_channel') return
+    const kind = (active?.kind || '').trim()
+  if (!chatID || kind !== 'standalone_channel') return
     try {
       await unsubscribeChannel(chatID)
       const currentCount = Number(active?.subscriber_count || 0)
@@ -91,7 +93,7 @@ export function createChannelActions(input: WorkspaceActionsInput) {
     }
 
     try {
-      const updater = (active.kind || '').trim() === 'standalone_channel' ? updateStandaloneChannel : updateChat
+    const updater = (active.kind || '').trim() === 'standalone_channel' ? updateStandaloneChannel : updateChat
       const payload = await updater(chatID, {
         title: cleanTitle,
         avatar_data_url: typeof profileInput.avatarDataUrl === 'string' ? profileInput.avatarDataUrl : undefined,
@@ -115,7 +117,8 @@ export function createChannelActions(input: WorkspaceActionsInput) {
 
   async function updateSelectedGroupMemberRole(userID: string, role: 'member' | 'moderator' | 'admin' | 'subscriber' | 'banned') {
     const chatID = (input.selectedChat.value?.id || '').trim()
-    if (!chatID || (input.selectedChat.value?.kind || '').trim() !== 'standalone_channel') return
+    const kind = (input.selectedChat.value?.kind || '').trim()
+  if (!chatID || kind !== 'standalone_channel') return
     try {
       const items = await updateChannelMemberRole(chatID, userID, role as 'subscriber' | 'admin' | 'banned')
       input.chatMembers.value = await input.enrichChatMembers(items)
@@ -127,7 +130,8 @@ export function createChannelActions(input: WorkspaceActionsInput) {
 
   async function removeSelectedGroupMember(userID: string) {
     const chatID = (input.selectedChat.value?.id || '').trim()
-    if (!chatID || (input.selectedChat.value?.kind || '').trim() !== 'standalone_channel') return
+    const kind = (input.selectedChat.value?.kind || '').trim()
+  if (!chatID || kind !== 'standalone_channel') return
     try {
       const items = await removeChannelMember(chatID, userID)
       input.chatMembers.value = await input.enrichChatMembers(items)

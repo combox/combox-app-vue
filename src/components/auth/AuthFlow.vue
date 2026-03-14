@@ -426,7 +426,7 @@ function onAvatarSelect(event: Event) {
 
 .auth-subtitle {
   margin: 0;
-  color: rgba(0, 0, 0, 0.62);
+  color: var(--text-muted);
   text-align: center;
   font-size: 14px;
   max-width: 360px;
@@ -464,7 +464,7 @@ function onAvatarSelect(event: Event) {
 }
 
 .auth-avatar {
-  color: rgba(0, 0, 0, 0.72);
+  color: var(--text-soft);
   font-weight: 700;
 }
 </style>

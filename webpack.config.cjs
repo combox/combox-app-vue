@@ -142,10 +142,6 @@ module.exports = (env, argv) => {
     experiments: isDev
       ? {
           cacheUnaffected: true,
-          lazyCompilation: {
-            entries: false,
-            imports: true,
-          },
         }
       : {},
     optimization: {

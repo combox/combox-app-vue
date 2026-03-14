@@ -48,8 +48,13 @@ export function setupWorkspaceLifecycle(input: SetupWorkspaceLifecycleInput) {
       }
       const selected = input.chats.value.find((chat) => chat.id === chatID)
       if ((selected?.kind || '').trim() === 'group') {
+        if (!channelID) {
+          // When browsing a group (topics pane) keep the current URL unchanged.
+          return
+        }
         const topicNumber = input.resolveSelectedGroupTopicNumber(chatID, channelID)
-        setHashToChatSelection(chatID, topicNumber || 1)
+        if (topicNumber) setHashToChatSelection(chatID, topicNumber)
+        else setHashToChatId(chatID)
         return
       }
       setHashToChatId(chatID)
@@ -104,7 +109,10 @@ export function setupWorkspaceLifecycle(input: SetupWorkspaceLifecycleInput) {
     await input.acceptInviteLinkFromHashIfNeeded()
     writeJSON(GROUP_CHANNELS_CACHE_KEY, input.groupChannelsByGroupID.value)
     if (input.selectedChatID.value && input.rawMessages.value.length === 0) {
-      void input.loadMessages(input.activeMessagesChatID.value || input.selectedChatID.value)
+      const active = input.chats.value.find((chat) => chat.id === input.selectedChatID.value)
+      const isGroup = (active?.kind || '').trim() === 'group'
+      const target = input.activeMessagesChatID.value || (isGroup ? '' : input.selectedChatID.value)
+      if (target) void input.loadMessages(target)
     }
     void input.start()
   })

@@ -42,10 +42,6 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
       if (groupID) {
         if (!input.groupChannelsOpen.value) input.groupChannelsOpen.value = true
         await input.loadGroupChannels(groupID)
-        if (!input.selectedGroupChannelByGroupId.value[groupID]) {
-          input.selectedGroupChannelByGroupId.value = { ...input.selectedGroupChannelByGroupId.value, [groupID]: groupID }
-          input.persistGroupSelection()
-        }
       }
       return
     }
@@ -62,12 +58,12 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
       const kind = (selected?.kind || '').trim()
       if (kind === 'group') {
         input.groupChannelsOpen.value = true
-        await input.loadGroupChannels(chatID)
-        const existing = (input.selectedGroupChannelByGroupId.value[chatID] || '').trim()
-        if (!existing) {
-          input.selectedGroupChannelByGroupId.value = { ...input.selectedGroupChannelByGroupId.value, [chatID]: chatID }
+        // Do not auto-select any topic when opening a group; show the topics list only.
+        if ((input.selectedGroupChannelByGroupId.value[chatID] || '').trim()) {
+          input.selectedGroupChannelByGroupId.value = { ...input.selectedGroupChannelByGroupId.value, [chatID]: '' }
           input.persistGroupSelection()
         }
+        await input.loadGroupChannels(chatID)
       } else {
         input.groupChannelsOpen.value = false
       }
@@ -79,13 +75,15 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
   async function selectDirectoryChat(chat: Partial<ChatItem> & { id: string; title: string; kind?: string }) {
     const chatID = (chat.id || '').trim()
     if (!chatID) return
+    const rawKind = (chat.kind || '').trim()
+  const normalizedKind = rawKind
     const normalizedChat = {
       id: chatID,
       title: (chat.title || '').trim() || 'Channel',
       is_direct: false,
       type: chat.type || 'standard',
-      kind: chat.kind || 'standalone_channel',
-      is_public: chat.is_public ?? ((chat.kind || '').trim() === 'standalone_channel'),
+      kind: normalizedKind || 'standalone_channel',
+      is_public: chat.is_public ?? (normalizedKind === 'standalone_channel'),
       public_slug: chat.public_slug,
       viewer_role: chat.viewer_role,
       subscriber_count: chat.subscriber_count,

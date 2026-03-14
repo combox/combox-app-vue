@@ -227,12 +227,12 @@ function makeWallpaper(baseHex: string, effective: EffectiveTheme): string {
   const dotRgb: [number, number, number] = isDark ? [255, 255, 255] : [15, 23, 42]
   const [dr, dg, db] = dotRgb
 
-  // A cheap-but-decent Telegram-like wallpaper: soft blobs + subtle dot grid + base gradient.
+  // A clean wallpaper: soft glows + subtle grain + base gradient.
   const layers: string[] = isDark
     ? [
-        `${svgDoodlesLayer()} 0 0 / 280px 280px repeat`,
-        `radial-gradient(circle at 70% 10%, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0) 54%)`,
-        `radial-gradient(circle at 20% 90%, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 56%)`,
+        `radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, rgba(0, 0, 0, 0) 1.6px) 0 0 / 24px 24px`,
+        `radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0) 58%)`,
+        `radial-gradient(circle at 82% 78%, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 62%)`,
         `linear-gradient(180deg, ${top} 0%, ${bottom} 100%)`,
       ]
     : [
@@ -245,30 +245,4 @@ function makeWallpaper(baseHex: string, effective: EffectiveTheme): string {
       ]
 
   return layers.join(', ')
-}
-
-function svgDoodlesLayer(): string {
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="280" height="280" viewBox="0 0 280 280">` +
-    `<g fill="none" stroke="white" stroke-opacity="0.06" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">` +
-    `<path d="M28 64c18-10 36-10 54 0"/>` +
-    `<path d="M210 56c10 6 16 16 16 28s-6 22-16 28"/>` +
-    `<path d="M72 210c18 10 36 10 54 0"/>` +
-    `<path d="M196 206c0 18-14 32-32 32s-32-14-32-32 14-32 32-32 32 14 32 32z"/>` +
-    `<path d="M44 132h32m-16-16v32"/>` +
-    `<path d="M236 138l16 10-16 10-16-10z"/>` +
-    `<path d="M122 34l10 16-10 16-10-16z"/>` +
-    `<path d="M142 122c10-6 20-6 30 0"/>` +
-    `<path d="M136 168c-10 6-20 6-30 0"/>` +
-    `</g></svg>`
-
-  return `url("${svgToDataUrl(svg)}")`
-}
-
-function svgToDataUrl(svg: string): string {
-  // Encode for CSS url(). Keep it small and avoid base64.
-  return `data:image/svg+xml,${encodeURIComponent(svg)
-    .replace(/%0A/g, '')
-    .replace(/%20/g, ' ')
-    .replace(/'/g, '%27')}`
 }

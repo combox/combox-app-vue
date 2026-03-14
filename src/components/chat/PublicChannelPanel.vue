@@ -586,12 +586,12 @@ function setChannelType(nextPublic: boolean) {
 
 <style scoped>
 .pcRoot {
-  width: 370px;
+  width: 410px;
   flex: 0 0 auto;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   border-left: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(255, 255, 255, 0.98));
+  background: var(--surface);
 }
 
 .pcHeader {
@@ -628,10 +628,10 @@ function setChannelType(nextPublic: boolean) {
 .pcScroll {
   min-height: 0;
   overflow-y: auto;
-  padding: 14px;
+  padding: 12px;
   display: grid;
   align-content: start;
-  gap: 14px;
+  gap: 12px;
   scrollbar-width: thin;
   scrollbar-color: rgba(15, 23, 42, 0.18) transparent;
 }
@@ -713,11 +713,10 @@ function setChannelType(nextPublic: boolean) {
 .pcHintBox {
   display: grid;
   gap: 10px;
-  padding: 14px;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.82);
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--surface-strong);
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-soft);
 }
 
 .pcActionTiles {
@@ -727,10 +726,10 @@ function setChannelType(nextPublic: boolean) {
 }
 
 .pcActionTile {
-  min-height: 72px;
+  min-height: 68px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.82);
-  border-radius: 18px;
+  background: var(--surface-strong);
+  border-radius: 14px;
   display: grid;
   place-items: center;
   gap: 6px;
@@ -803,7 +802,7 @@ function setChannelType(nextPublic: boolean) {
   padding: 0 12px;
   border: 0;
   border-radius: 999px;
-  background: linear-gradient(135deg, #4b91dd, #3268ea);
+  background: #4a90d9;
   color: #fff;
   font-size: .86rem;
   font-weight: 700;
@@ -959,10 +958,9 @@ function setChannelType(nextPublic: boolean) {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 12px;
   padding: 10px 12px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.82);
+  border-radius: 14px;
+  background: var(--surface-strong);
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-soft);
   cursor: pointer;
 }
 

@@ -13,6 +13,7 @@ type PendingRequest = {
 
 type UseChatRealtimeArgs = {
   getSelectedChatID: () => string
+  getAdditionalChatIDs?: () => string[]
   reloadChats: () => Promise<void>
   reloadMessages: (chatID: string) => Promise<void>
   onChatEvent?: (payload: { type: string; chatID: string; raw: unknown }) => void
@@ -233,7 +234,10 @@ export function useChatRealtime(args: UseChatRealtimeArgs) {
   }
 
   const scheduleMessagesReload = (chatID: string) => {
-    if (!chatID || chatID !== args.getSelectedChatID()) return
+    const selectedChatID = (args.getSelectedChatID() || '').trim()
+    const additional = (args.getAdditionalChatIDs?.() || []).map((id) => (id || '').trim()).filter(Boolean)
+    if (!chatID) return
+    if (chatID !== selectedChatID && !additional.includes(chatID)) return
     if (runtime.messagesReloadTimer) window.clearTimeout(runtime.messagesReloadTimer)
     runtime.messagesReloadTimer = window.setTimeout(() => {
       runtime.messagesReloadTimer = null
@@ -321,8 +325,12 @@ export function useChatRealtime(args: UseChatRealtimeArgs) {
         runtime.reconnectDelay = 500
         runtime.wsAttempt = 0
         void args.reloadChats()
-        const selectedChatID = args.getSelectedChatID()
+        const selectedChatID = (args.getSelectedChatID() || '').trim()
         if (selectedChatID) void args.reloadMessages(selectedChatID)
+        const additional = (args.getAdditionalChatIDs?.() || []).map((id) => (id || '').trim()).filter(Boolean)
+        for (const chatID of additional) {
+          if (chatID && chatID !== selectedChatID) void args.reloadMessages(chatID)
+        }
       }
       socket.onmessage = onInboundEvent
       socket.onerror = () => {

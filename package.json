@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
-    "combox-api": "^0.1.1",
+    "combox-api": "file:../combox-api",
     "emojibase-data": "^17.0.0",
     "plyr": "^3.8.4",
     "serve": "^14.2.4",

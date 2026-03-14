@@ -170,6 +170,5 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(port, host, () => {
-  // eslint-disable-next-line no-console
   console.log(`Preview server: http://${host}:${port} (root: ${path.relative(process.cwd(), dir) || '.'})`)
 })

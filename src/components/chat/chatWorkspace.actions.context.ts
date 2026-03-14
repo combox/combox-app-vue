@@ -149,7 +149,7 @@ export function createContextActions(deps: CreateContextActionsInput) {
     deps.focusedInfoUserProfile.value = null
     deps.infoOpen.value = true
     deps.chatMenuAnchor.value = null
-    if ((deps.selectedChat.value?.kind || '').trim() === 'standalone_channel') {
+if ((deps.selectedChat.value?.kind || '').trim() === 'standalone_channel') {
       void deps.refreshSelectedChannel(deps.selectedChat.value?.id || '')
       void deps.refreshRemovedChatMembers(deps.selectedChat.value?.id || '')
       void deps.refreshSelectedChatInviteLinks(deps.selectedChat.value?.id || '')

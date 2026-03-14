@@ -20,7 +20,13 @@ function getParsedContent(raw: string): ParsedCacheEntry {
 }
 
 export function toViewMessage(raw: MessageItem, urlsByAttachment: AttachmentUrlMap): ViewMessage {
-  const parsed = getParsedContent(raw.content || '')
+  const rawRecord = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const senderUserId = String(rawRecord.sender_user_id || '').trim()
+  const normalizedRaw: MessageItem = senderUserId
+    ? { ...raw, user_id: senderUserId }
+    : raw
+
+  const parsed = getParsedContent(normalizedRaw.content || '')
   const attachments: ResolvedAttachment[] = parsed.attachments.map((token) => {
     const hydrated = urlsByAttachment[token.id]
     return {
@@ -37,7 +43,7 @@ export function toViewMessage(raw: MessageItem, urlsByAttachment: AttachmentUrlM
   })
 
   return {
-    raw,
+    raw: normalizedRaw,
     text: parsed.text || '',
     attachments,
   }

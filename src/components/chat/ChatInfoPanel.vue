@@ -545,12 +545,15 @@ function openGroupSettings() {
       :selected-chat="selectedChat"
       :current-user="currentUser"
       :chat-members="chatMembers"
+      :removed-chat-members="removedChatMembers"
+      :invite-links="selectedChatInviteLinks"
       @save-profile="emit('saveGroupProfile', $event)"
       @leave-chat="emit('leaveChat', $event)"
       @close="manageMembers = false"
       @add-members="emit('addMembers', $event)"
       @update-member-role="emit('updateMemberRole', $event)"
       @remove-member="emit('removeMember', $event)"
+      @create-invite-link="emit('createInviteLink', $event)"
     />
     <template v-else>
     <div class="ipHeader">

@@ -28,6 +28,8 @@ const props = defineProps<{
   canReact?: boolean
   isTopLevelPost?: boolean
   commentCount?: number
+  selectionMode?: boolean
+  selected?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -40,6 +42,7 @@ const emit = defineEmits<{
   replyToMessage: [message: ViewMessage]
   openDiscussion: [message: ViewMessage]
   jumpToMessage: [messageId: string]
+  toggleSelect: [message: ViewMessage]
 }>()
 
 const { t } = useI18n()
@@ -96,8 +99,27 @@ const timeText = computed(() => formatMessageTime(props.message.raw.created_at))
 const isEdited = computed(() => Boolean((props.message.raw.edited_at || '').trim()))
 const normalizedDeliveryStatus = computed(() => (props.deliveryStatus || '').trim().toLowerCase())
 const senderUserID = computed(() => (props.message.raw.user_id || '').trim())
+const rawMessageMeta = computed<Record<string, unknown>>(
+  () => ((props.message.raw && typeof props.message.raw === 'object' ? props.message.raw : {}) as Record<string, unknown>),
+)
+const viewCount = computed(() => {
+  const raw = rawMessageMeta.value
+  const candidates = [raw.views_count, raw.view_count, raw.views, raw.seen_count, raw.seen]
+  for (const value of candidates) {
+    const n = typeof value === 'number' ? value : Number(String(value || '').trim())
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return 0
+})
 const senderAvatar = computed(() => normalizeAvatarSrc((props.avatarByUserId || {})[senderUserID.value] || ''))
-const senderName = computed(() => ((props.senderNameByUserId || {})[senderUserID.value] || '').trim())
+const senderName = computed(() => {
+  const fromMap = ((props.senderNameByUserId || {})[senderUserID.value] || '').trim()
+  if (fromMap) return fromMap
+  const rawName = String(rawMessageMeta.value.sender_name || '').trim()
+  if (rawName) return rawName
+  const rawUsername = String(rawMessageMeta.value.sender_username || '').trim()
+  return rawUsername
+})
 const senderRole = computed(() => ((props.senderRoleByUserId || {})[senderUserID.value] || '').trim())
 const replySender = computed(() => (props.message.raw.reply_to_message_sender_name || '').trim())
 const replyPreview = computed(() => {
@@ -177,12 +199,22 @@ function imageGalleryStyle(attachments: ResolvedAttachment[]) {
 }
 
 function openSenderInfo() {
-  if (!senderUserID.value || props.mine) return
+  if (!senderUserID.value) return
+  // Discussion mode or group: allow opening info for others.
+  // For 'mine', we usually don't open, but in discussions it's fine.
   emit('openUserInfo', senderUserID.value)
 }
 
 function onBubbleClick(event: MouseEvent) {
   const target = event.target as HTMLElement | null
+
+  if ((event.ctrlKey || event.metaKey || event.shiftKey) && !target?.closest('a')) {
+    event.preventDefault()
+    event.stopPropagation()
+    emit('toggleSelect', props.message)
+    return
+  }
+
   const anchor = target?.closest('a.mbLink') as HTMLAnchorElement | null
   if (anchor) {
     const href = (anchor.getAttribute('href') || '').trim()
@@ -201,6 +233,12 @@ function onBubbleClick(event: MouseEvent) {
 
 function startComment() {
   emit('openDiscussion', props.message)
+}
+
+function onReplyClick() {
+  const targetId = (props.message.raw.reply_to_message_id || '').trim()
+  if (!targetId) return
+  emit('jumpToMessage', targetId)
 }
 </script>
 
@@ -256,6 +294,10 @@ function startComment() {
           size="12"
           class="mbEditedIcon"
         />
+        <template v-if="viewCount > 0">
+          <v-icon icon="mdi-eye-outline" size="13" class="mbViewsIcon" />
+          <span>{{ viewCount }}</span>
+        </template>
         <span>{{ timeText }}</span>
         <v-icon
           v-if="mine"
@@ -279,95 +321,101 @@ function startComment() {
         <span class="mbSenderName">{{ senderName }}</span>
         <span v-if="senderRole" class="mbSenderRole">{{ senderRole }}</span>
       </div>
-      <article class="mbBubble" :class="{ hasVideoAttachment }" @contextmenu="onContextMenu" @click="onBubbleClick">
-      <div v-if="hasReply" class="mbReply" role="button" tabindex="0" @click.stop="onReplyClick" @keydown.enter.prevent="onReplyClick" @keydown.space.prevent="onReplyClick">
-        <div class="mbReplyAccent" aria-hidden="true" />
-        <div class="mbReplyBody">
-          <div class="mbReplySender">{{ replySender || t('chat.reply') }}</div>
-          <div class="mbReplyPreview">{{ replyPreview || t('chat.message') }}</div>
-        </div>
-      </div>
-
-      <p v-if="showText" class="mbText" v-html="textHtml" />
-      <p v-else-if="message.attachments.length === 0" class="mbText">{{ t('chat.empty_message') }}</p>
-
-      <div v-if="previewLink" class="mbLinkList">
-        <LinkPreviewCard
-          :url="previewLink"
-          :media-overlay-open="mediaOverlayOpen"
-          @open-video="$emit('openVideo', $event)"
-        />
-      </div>
-
-      <div v-if="message.attachments.length > 0" class="bubbleAttachments" :class="{ mediaOnlyGrid: allAttachmentsAreImages && message.attachments.length > 1 }">
-        <template v-if="allAttachmentsAreImages && message.attachments.length > 1">
-          <div class="mbImageGallery inBubble" :style="imageGalleryStyle(message.attachments)">
-            <button
-              v-for="attachment in message.attachments"
-              :key="attachment.id"
-              type="button"
-              class="mbGalleryItem"
-              @click="attachment.url && $emit('openImage', attachment.url)"
-            >
-              <LazyDecodedImage
-                :src="attachment.url"
-                :preview-src="attachment.previewUrl"
-                :alt="attachment.filename || 'image'"
-                img-class="mbGalleryImage"
-              />
-            </button>
+      <article class="mbBubble" :class="{ mine, hasVideoAttachment, selected: Boolean(selectionMode && selected) }" @contextmenu="onContextMenu" @click="onBubbleClick">
+        <div class="mbBubbleContent">
+          <div v-if="hasReply" class="mbReply" role="button" tabindex="0" @click.stop="onReplyClick" @keydown.enter.prevent="onReplyClick" @keydown.space.prevent="onReplyClick">
+            <div class="mbReplyAccent" aria-hidden="true" />
+            <div class="mbReplyBody">
+              <div class="mbReplySender">{{ replySender || t('chat.reply') }}</div>
+              <div class="mbReplyPreview">{{ replyPreview || t('chat.message') }}</div>
+            </div>
           </div>
-        </template>
-        <template v-else>
-          <MessageMedia
-            v-for="attachment in message.attachments"
-            :key="attachment.id"
-            :attachment="attachment"
-            :media-overlay-open="mediaOverlayOpen"
-            @open-image="$emit('openImage', $event)"
-            @open-video="$emit('openVideo', $event)"
+
+          <p v-if="showText" class="mbText" v-html="textHtml" />
+          <p v-else-if="message.attachments.length === 0" class="mbText">{{ t('chat.empty_message') }}</p>
+
+          <div v-if="previewLink" class="mbLinkList">
+            <LinkPreviewCard
+              :url="previewLink"
+              :media-overlay-open="mediaOverlayOpen"
+              @open-video="$emit('openVideo', $event)"
+            />
+          </div>
+
+          <div v-if="message.attachments.length > 0" class="bubbleAttachments" :class="{ mediaOnlyGrid: allAttachmentsAreImages && message.attachments.length > 1 }">
+            <template v-if="allAttachmentsAreImages && message.attachments.length > 1">
+              <div class="mbImageGallery inBubble" :style="imageGalleryStyle(message.attachments)">
+                <button
+                  v-for="attachment in message.attachments"
+                  :key="attachment.id"
+                  type="button"
+                  class="mbGalleryItem"
+                  @click="attachment.url && $emit('openImage', attachment.url)"
+                >
+                  <LazyDecodedImage
+                    :src="attachment.url"
+                    :preview-src="attachment.previewUrl"
+                    :alt="attachment.filename || 'image'"
+                    img-class="mbGalleryImage"
+                  />
+                </button>
+              </div>
+            </template>
+            <template v-else>
+              <MessageMedia
+                v-for="attachment in message.attachments"
+                :key="attachment.id"
+                :attachment="attachment"
+                :media-overlay-open="mediaOverlayOpen"
+                @open-image="$emit('openImage', $event)"
+                @open-video="$emit('openVideo', $event)"
+              />
+            </template>
+          </div>
+
+          <footer class="mbMeta">
+            <v-icon
+              v-if="isEdited"
+              icon="mdi-pencil"
+              size="12"
+              class="mbEditedIcon"
+            />
+            <template v-if="viewCount > 0">
+              <v-icon icon="mdi-eye-outline" size="13" class="mbViewsIcon" />
+              <span>{{ viewCount }}</span>
+            </template>
+            <span>{{ timeText }}</span>
+            <v-icon
+              v-if="mine"
+              :icon="normalizedDeliveryStatus === 'read' ? 'mdi-check-all' : 'mdi-check'"
+              size="13"
+              :class="normalizedDeliveryStatus === 'read' ? 'mbStatusRead' : 'mbStatusSent'"
+            />
+          </footer>
+
+          <ReactionBar
+            v-if="Array.isArray(message.raw.reactions) && message.raw.reactions.length > 0"
+            :reactions="message.raw.reactions"
+            :current-user-id="currentUserId"
+            :current-user-avatar-src="currentUserAvatarSrc"
+            :avatar-by-user-id="avatarByUserId"
+            :can-react="canReact"
+            @react="onReact"
           />
-        </template>
-      </div>
-
-      <footer class="mbMeta">
-        <v-icon
-          v-if="isEdited"
-          icon="mdi-pencil"
-          size="12"
-          class="mbEditedIcon"
-        />
-        <span>{{ timeText }}</span>
-        <v-icon
-          v-if="mine"
-          :icon="normalizedDeliveryStatus === 'read' ? 'mdi-check-all' : 'mdi-check'"
-          size="13"
-          :class="normalizedDeliveryStatus === 'read' ? 'mbStatusRead' : 'mbStatusSent'"
-        />
-      </footer>
-
-      <ReactionBar
-        v-if="Array.isArray(message.raw.reactions) && message.raw.reactions.length > 0"
-        :reactions="message.raw.reactions"
-        :current-user-id="currentUserId"
-        :current-user-avatar-src="currentUserAvatarSrc"
-        :avatar-by-user-id="avatarByUserId"
-        :can-react="canReact"
-        @react="onReact"
-      />
-      <button v-if="showCommentAction" type="button" class="mbCommentFooter" @click.stop="startComment">
-        <span class="mbCommentFooterLeft">
-          <v-icon icon="mdi-comment-outline" size="16" />
-          <span class="mbCommentFooterText">
-            {{
-              (props.commentCount || 0) > 0
-                ? t('chat.comments_count', { count: props.commentCount || 0 }, `${props.commentCount || 0} comments`)
-                : t('chat.leave_comment', undefined, 'Leave a comment')
-            }}
+        </div>
+        <button v-if="showCommentAction" type="button" class="mbCommentFooter" @click.stop="startComment">
+          <span class="mbCommentFooterLeft">
+            <v-icon icon="mdi-comment-outline" size="16" />
+            <span class="mbCommentFooterText">
+              {{
+                (props.commentCount || 0) > 0
+                  ? t('chat.comments_count', { count: props.commentCount || 0 }, `${props.commentCount || 0} comments`)
+                  : t('chat.leave_comment', undefined, 'Leave a comment')
+              }}
+            </span>
           </span>
-        </span>
-        <v-icon icon="mdi-chevron-right" size="18" />
-      </button>
+          <v-icon icon="mdi-chevron-right" size="18" />
+        </button>
       </article>
     </div>
   </div>
@@ -388,38 +436,64 @@ function startComment() {
 
 .mbBubble {
   position: relative;
-  display: inline-block;
+  display: flex;
+  flex-direction: column;
   max-width: min(720px, 100%);
   width: auto;
   min-width: 0;
-  padding: 8px 12px 8px;
   border-radius: 14px 14px 14px 8px;
   background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
   color: var(--text);
+  overflow: hidden;
+}
+
+.mbBubble.mine {
+  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-strong));
+  border-color: rgba(74, 144, 217, 0.24);
+  border-radius: 14px 14px 8px 14px;
+}
+
+.mbBubbleContent {
+  padding: 10px 12px 6px;
+  width: 100%;
 }
 
 .mbCommentFooter {
-  width: calc(100% + 24px);
-  margin: 10px -12px -8px;
-  min-height: 42px;
-  padding: 0 12px;
-  border: 0;
-  border-top: 1px solid var(--border);
-  border-radius: 0 0 14px 8px;
-  background: var(--surface-soft);
-  color: var(--text-soft);
-  font-size: 12px;
-  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 120ms;
   cursor: pointer;
+  margin: 0;
+}
+
+.mbCommentFooter:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.mbBubble.mine .mbCommentFooter {
+  border-top-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+.mbBubble.mine .mbCommentFooter:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .mbCommentFooterLeft {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
 }
@@ -535,10 +609,12 @@ function startComment() {
 }
 
 .mbRow.mine .mbBubble {
-  background: var(--accent-soft);
-  background: color-mix(in srgb, var(--accent) 18%, var(--surface-strong));
-  border-color: rgba(74, 144, 217, 0.24);
-  border-radius: 14px 14px 8px 14px;
+  border-bottom-right-radius: 4px;
+}
+
+.mbBubble.selected {
+  outline: 2px solid rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
 }
 
 .mbBubble.hasVideoAttachment {
@@ -646,6 +722,11 @@ function startComment() {
 .mbEditedIcon {
   color: var(--text-muted);
   opacity: 0.82;
+}
+
+.mbViewsIcon {
+  color: var(--text-muted);
+  opacity: 0.9;
 }
 
 .mbStatusRead {

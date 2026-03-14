@@ -1,4 +1,4 @@
-import { getStandaloneChannel, listChatInviteLinks, listChatMembers, listChannelMembers, type ChatInviteLink, type ChatItem, type ChatMemberProfile } from 'combox-api'
+import { getStandaloneChannel, listChatInviteLinks, listChatMembers, type ChatInviteLink, type ChatItem, type ChatMemberProfile } from 'combox-api'
 import type { Ref } from 'vue'
 import { CHATS_CACHE_KEY } from './chatWorkspace.constants'
 import { enrichChatMembers } from './chatWorkspace.members'
@@ -28,10 +28,7 @@ export function setupWorkspaceMeta(input: SetupWorkspaceMetaInput) {
       return
     }
     try {
-      const target = input.chats.value.find((item) => item.id === cleanChatID) || input.invitePreviewChat.value
-      const items = (target?.kind || '').trim() === 'standalone_channel'
-        ? await listChannelMembers(cleanChatID)
-        : await listChatMembers(cleanChatID)
+      const items = await listChatMembers(cleanChatID)
       input.chatMembers.value = await enrichChatMembers(items)
     } catch {
       input.chatMembers.value = []
@@ -45,10 +42,7 @@ export function setupWorkspaceMeta(input: SetupWorkspaceMetaInput) {
       return
     }
     try {
-      const target = input.chats.value.find((item) => item.id === cleanChatID) || input.invitePreviewChat.value
-      const items = (target?.kind || '').trim() === 'standalone_channel'
-        ? await listChannelMembers(cleanChatID, { include_banned: true })
-        : await listChatMembers(cleanChatID, { include_banned: true })
+      const items = await listChatMembers(cleanChatID, { include_banned: true })
       const banned = items.filter((item) => ((item.role || '').trim().toLowerCase()) === 'banned')
       input.removedChatMembers.value = await enrichChatMembers(banned)
     } catch {

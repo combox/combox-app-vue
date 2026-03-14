@@ -66,6 +66,9 @@ export default defineComponent({
     'closeGroupChannels',
     'selectGroupChannel',
     'createGroupChannel',
+    'chatContextMute',
+    'chatContextLeave',
+    'chatContextDelete',
   ],
   setup(props, { emit }) {
     const { t } = useI18n()
@@ -127,7 +130,17 @@ export default defineComponent({
     function onOpenSettings() { createMenuOpen.value = false; void loadSettings(); emit('openSettings') }
     function onCloseSettings() { emit('closeSettings') }
     function onCreateGroup() { createMenuOpen.value = false; createDialog.value = { open: true, kind: 'group', title: '', slug: '', isPublic: true, avatarDataUrl: null, saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = [] }
-    function onCreateChannel() { createMenuOpen.value = false; createDialog.value = { open: true, kind: 'channel', title: '', slug: '', isPublic: true, avatarDataUrl: null, saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = [] }
+    function onCreateChannel() {
+      createMenuOpen.value = false
+      if (props.canCreateChannel) {
+        openTopicCreate()
+        return
+      }
+      createDialog.value = { open: true, kind: 'channel', title: '', slug: '', isPublic: true, avatarDataUrl: null, saving: false, error: '' }
+      createMemberQuery.value = ''
+      createMemberResults.value = []
+      createMemberIDs.value = []
+    }
     function closeCreateDialog() { createDialog.value = { open: false, kind: createDialog.value.kind, title: '', slug: '', isPublic: true, avatarDataUrl: null, saving: false, error: '' }; createMemberQuery.value = ''; createMemberResults.value = []; createMemberIDs.value = []; createMemberBusy.value = false }
     function pickCreateAvatar() {
       const input = document.createElement('input')
@@ -281,6 +294,7 @@ export default defineComponent({
           :create-menu-open="false"
           :can-create-channel="canCreateChannel"
           :last-attachment-preview-by-id="lastAttachmentPreviewById"
+          :muted-chat-i-ds="mutedChatIDs"
           @update:search="emit('update:search', $event)"
           @select-tab="emit('update:selectedFilterTab', $event)"
           @toggle-create-menu="createMenuOpen = !createMenuOpen"
@@ -291,6 +305,9 @@ export default defineComponent({
           @select-chat="emit('select', $event)"
           @select-directory-chat="emit('selectDirectoryChat', $event)"
           @select-directory-user="emit('selectDirectoryUser', $event)"
+          @chat-context-mute="emit('chatContextMute', $event)"
+          @chat-context-leave="emit('chatContextLeave', $event)"
+          @chat-context-delete="emit('chatContextDelete', $event)"
         />
       </div>
 
@@ -315,6 +332,7 @@ export default defineComponent({
           :create-menu-open="createMenuOpen"
           :can-create-channel="canCreateChannel"
           :last-attachment-preview-by-id="lastAttachmentPreviewById"
+          :muted-chat-i-ds="mutedChatIDs"
           @update:search="emit('update:search', $event)"
           @select-tab="emit('update:selectedFilterTab', $event)"
           @toggle-create-menu="createMenuOpen = !createMenuOpen"
@@ -325,6 +343,9 @@ export default defineComponent({
           @select-chat="emit('select', $event)"
           @select-directory-chat="emit('selectDirectoryChat', $event)"
           @select-directory-user="emit('selectDirectoryUser', $event)"
+          @chat-context-mute="emit('chatContextMute', $event)"
+          @chat-context-leave="emit('chatContextLeave', $event)"
+          @chat-context-delete="emit('chatContextDelete', $event)"
         />
       </div>
 

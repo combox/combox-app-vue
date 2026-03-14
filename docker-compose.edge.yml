@@ -3,6 +3,8 @@ services:
     build:
       context: .
       target: runtime
+      args:
+        COMBOX_API_VERSION: ${COMBOX_API_VERSION:-0.1.2}
     container_name: combox-app-vue
     restart: unless-stopped
     environment:

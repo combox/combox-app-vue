@@ -16,6 +16,7 @@ const emit = defineEmits<{
   removePendingFile: [id: string]
   clearReply: []
   clearEdit: []
+  clearForward: []
 }>()
 
 const props = defineProps<{
@@ -25,6 +26,7 @@ const props = defineProps<{
   pendingFiles: PendingFile[]
   replyToMessage: ViewMessage | null
   editingMessage: ViewMessage | null
+  forwardMessages?: ViewMessage[] | null
   suppressReplyPreview?: boolean
 }>()
 
@@ -181,6 +183,18 @@ onBeforeUnmount(() => {
         <div class="replyPreview">{{ t('chat.edit_message_hint', undefined, 'Save changes or cancel editing') }}</div>
       </div>
       <button type="button" class="replyClose" @click="emit('clearEdit')">
+        <v-icon icon="mdi-close" size="16" />
+      </button>
+    </div>
+
+    <div v-else-if="(forwardMessages || []).length > 0" class="replyBar">
+      <div class="replyMain">
+        <div class="replyAuthor">{{ t('chat.forward', undefined, 'Forward') }}</div>
+        <div class="replyPreview">
+          {{ t('chat.forwarding_messages', { count: (forwardMessages || []).length } as any, `${(forwardMessages || []).length} messages`) }}
+        </div>
+      </div>
+      <button type="button" class="replyClose" @click="emit('clearForward')">
         <v-icon icon="mdi-close" size="16" />
       </button>
     </div>

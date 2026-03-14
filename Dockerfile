@@ -21,6 +21,7 @@ CMD ["npm", "run", "dev"]
 FROM base AS build
 COPY src ./src
 COPY public ./public
+COPY scripts ./scripts
 COPY index.html ./index.html
 COPY tsconfig.json ./tsconfig.json
 COPY tsconfig.app.json ./tsconfig.app.json
@@ -31,6 +32,7 @@ FROM node:22-bookworm AS runtime
 WORKDIR /app/combox-app-vue
 ENV NODE_ENV=production
 COPY --from=build /app/combox-app-vue/dist ./dist
+COPY --from=build /app/combox-app-vue/scripts ./scripts
 COPY --from=build /app/combox-app-vue/package.json ./package.json
 COPY --from=build /app/combox-app-vue/package-lock.json ./package-lock.json
 COPY --from=build /app/combox-app-vue/node_modules ./node_modules

@@ -1,7 +1,27 @@
 import type { Ref } from 'vue'
-import { getAttachment, getProfileSettings, listChannels, listChats, listMessages, parseMessageContent, searchDirectory, type ChatItem, type MessageItem, type SearchResults } from 'combox-api'
+import {
+  getAttachment,
+  getProfileSettings,
+  listChannels,
+  listChats,
+  listMessages,
+  normalizeMessageStatuses,
+  parseMessageContent,
+  searchDirectory,
+  type ChatItem,
+  type MessageItem,
+  type SearchResults,
+} from 'combox-api'
 import { hydrateAttachmentURLs } from './chatWorkspace.attachments'
-import { CHATS_CACHE_KEY, EMPTY_SEARCH_RESULTS, GROUP_CHANNELS_CACHE_KEY, MSG_CACHE_PREFIX, SELECTED_CHAT_KEY, STATUS_CACHE_PREFIX, STATUS_GLOBAL_CACHE_KEY } from './chatWorkspace.constants'
+import {
+  CHATS_CACHE_KEY,
+  EMPTY_SEARCH_RESULTS,
+  GROUP_CHANNELS_CACHE_KEY,
+  MSG_CACHE_PREFIX,
+  SELECTED_CHAT_KEY,
+  STATUS_CACHE_PREFIX,
+  STATUS_GLOBAL_CACHE_KEY,
+} from './chatWorkspace.constants'
 import { normalizeMessageOrder } from './chatWorkspace.helpers'
 import { readJSON, writeJSON } from './chatWorkspace.storage'
 import type { AttachmentView, MessageStatus } from './chatWorkspace.types'
@@ -54,9 +74,15 @@ export function setupWorkspaceLoaders(input: WorkspaceLoadersInput) {
       try {
         const fromRest = await listChats()
         if (Array.isArray(fromRest) && fromRest.length > 0) {
+          // Treat REST as the source of truth for removals (e.g. deleted chats).
+          // Then backfill anything WS returned that REST may omit.
           const byId = new Map<string, ChatItem>()
-          for (const item of result) byId.set((item.id || '').trim(), item)
           for (const item of fromRest) {
+            const id = (item.id || '').trim()
+            if (!id) continue
+            byId.set(id, item)
+          }
+          for (const item of result) {
             const id = (item.id || '').trim()
             if (!id) continue
             if (!byId.has(id)) byId.set(id, item)
@@ -71,7 +97,9 @@ export function setupWorkspaceLoaders(input: WorkspaceLoadersInput) {
       writeJSON(CHATS_CACHE_KEY, input.chats.value)
 
       const nextSelected =
-        (input.selectedChatID.value && (input.chats.value.some((chat) => chat.id === input.selectedChatID.value) || input.invitePreviewChat.value?.id === input.selectedChatID.value) && input.selectedChatID.value) ||
+        (input.selectedChatID.value &&
+          (input.chats.value.some((chat) => chat.id === input.selectedChatID.value) || input.invitePreviewChat.value?.id === input.selectedChatID.value) &&
+          input.selectedChatID.value) ||
         ''
 
       if (input.selectedChatID.value !== nextSelected) input.selectedChatID.value = nextSelected
@@ -130,9 +158,22 @@ export function setupWorkspaceLoaders(input: WorkspaceLoadersInput) {
         cleanGroupID === input.hashSelectedChatID
           ? input.resolveGroupChannelIdByTopicNumber(cleanGroupID, input.hashSelectedChannelTopicNumber)
           : ''
-      const nextSelected = hashTarget || selected || cleanGroupID
-      if (!nextSelected || !allowed.has(nextSelected)) {
-        input.selectedGroupChannelByGroupId.value = { ...input.selectedGroupChannelByGroupId.value, [cleanGroupID]: cleanGroupID }
+      const nextSelected = hashTarget || selected
+      const isBrowsingGroup = input.selectedChatID.value === cleanGroupID
+      const shouldSkipAutoSelect = isBrowsingGroup && !nextSelected
+      if (!nextSelected) {
+        if (!shouldSkipAutoSelect) {
+          input.selectedGroupChannelByGroupId.value = { ...input.selectedGroupChannelByGroupId.value, [cleanGroupID]: cleanGroupID }
+          input.persistGroupSelection()
+        }
+        return
+      }
+      if (!allowed.has(nextSelected)) {
+        if (shouldSkipAutoSelect) {
+          input.selectedGroupChannelByGroupId.value = { ...input.selectedGroupChannelByGroupId.value, [cleanGroupID]: '' }
+        } else {
+          input.selectedGroupChannelByGroupId.value = { ...input.selectedGroupChannelByGroupId.value, [cleanGroupID]: cleanGroupID }
+        }
         input.persistGroupSelection()
         return
       }
@@ -170,21 +211,35 @@ export function setupWorkspaceLoaders(input: WorkspaceLoadersInput) {
       input.messageStatusesByMessage.value = cachedStatuses && typeof cachedStatuses === 'object' ? { ...globalStatuses, ...cachedStatuses } : { ...globalStatuses }
 
       let normalized: MessageItem[] = []
+      let statuses: MessageStatus[] = []
       try {
-        const payload = await input.requestViaWs<{ items?: MessageItem[]; next_cursor?: string; error?: string }>('request.messages', {
+        const payload = await input.requestViaWs<{ items?: MessageItem[]; statuses?: MessageStatus[]; next_cursor?: string; error?: string }>('request.messages', {
           chat_id: chatID,
           cursor: '',
           limit: 80,
         })
         normalized = normalizeMessageOrder(Array.isArray(payload.items) ? payload.items : [])
+        statuses = Array.isArray(payload.statuses) ? payload.statuses : []
       } catch {
         const payload = await listMessages(chatID, '', 80)
         normalized = normalizeMessageOrder(Array.isArray(payload.items) ? payload.items : [])
+        statuses = Array.isArray(payload.statuses) ? payload.statuses : []
       }
 
       input.rawMessages.value = normalized
       writeJSON(`${MSG_CACHE_PREFIX}${chatID}`, normalized)
       await hydrateAttachmentURLs(normalized, input.urlsByAttachment, input.attachmentRequests, parseMessageContent, getAttachment)
+
+      const normalizedStatuses = normalizeMessageStatuses(statuses, chatID)
+      if (normalizedStatuses.length > 0) {
+        const next = { ...input.messageStatusesByMessage.value }
+        for (const status of normalizedStatuses) {
+          next[status.message_id] = status as MessageStatus
+        }
+        input.messageStatusesByMessage.value = next
+        writeJSON(`${STATUS_CACHE_PREFIX}${chatID}`, next)
+        writeJSON(STATUS_GLOBAL_CACHE_KEY, { ...globalStatuses, ...next })
+      }
 
       const allowed = new Set(normalized.map((item) => item.id))
       const filtered: Record<string, MessageStatus> = {}
