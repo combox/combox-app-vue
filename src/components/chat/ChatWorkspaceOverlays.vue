@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { ChatItem } from 'combox-api'
-import { computed } from 'vue'
+import { computed, defineAsyncComponent } from 'vue'
 import { useI18n } from '../../i18n/i18n'
-import PhotoViewer from './PhotoViewer.vue'
-import VideoViewer from './VideoViewer.vue'
+
+const PhotoViewer = defineAsyncComponent(() => import('./PhotoViewer.vue'))
+const VideoViewer = defineAsyncComponent(() => import('./VideoViewer.vue'))
 
 const props = defineProps<{
   viewerSrc: string

@@ -15,6 +15,7 @@
     "@mdi/font": "^7.4.47",
     "combox-api": "file:../combox-api",
     "emojibase-data": "^17.0.0",
+    "hls.js": "^1.6.16",
     "plyr": "^3.8.4",
     "serve": "^14.2.4",
     "vue": "^3.5.22",

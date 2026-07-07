@@ -19,47 +19,55 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 6px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--muted);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
 .label {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 14px;
 }
 
 .input {
   width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
   color: var(--text);
   height: 42px;
   padding: 0 12px;
   outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .button {
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   height: 40px;
   padding: 0 14px;
   color: #fff;
   font-weight: 700;
-  background: #3699ff;
+  background: var(--accent);
   cursor: pointer;
+  transition: background 120ms ease;
 }
 
 .button:hover {
-  background: #2079d1;
+  background: var(--accent-strong);
 }
 
 .button.ghost {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .button[disabled] {

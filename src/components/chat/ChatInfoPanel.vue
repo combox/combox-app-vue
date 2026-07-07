@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { getAttachmentDownloadURL } from 'combox-api'
 import type { AuthUser, ChatInviteLink, ChatItem, ChatMemberProfile, LocalProfile } from 'combox-api'
 import { normalizeAvatarSrc } from './chatUtils'
 import type { ViewMessage } from './chatTypes'
-import GroupEditPanel from './GroupEditPanel.vue'
+const GroupEditPanel = defineAsyncComponent(() => import('./GroupEditPanel.vue'))
 import ChannelPanel from './PublicChannelPanel.vue'
 import { useI18n } from '../../i18n/i18n'
 import { yieldToMain } from './yieldToMain'

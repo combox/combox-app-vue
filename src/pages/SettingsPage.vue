@@ -53,14 +53,25 @@ function removeAvatar() {
   avatarDirty.value = true
 }
 
+const avatarInput = ref<HTMLInputElement | null>(null)
+
+function pickAvatar() {
+  avatarInput.value?.click()
+}
+
 function handleAvatarUpload(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
+  input.value = ''
   if (!file) return
+  if (!file.type.startsWith('image/')) return
   const reader = new FileReader()
   reader.onload = () => {
     avatarDataUrl.value = typeof reader.result === 'string' ? reader.result : ''
     avatarDirty.value = true
+  }
+  reader.onerror = () => {
+    errorText.value = t('settings.avatar_read_failed', undefined, 'Failed to read the image.')
   }
   reader.readAsDataURL(file)
 }
@@ -317,7 +328,14 @@ onMounted(() => {
 
           <template v-else>
             <section class="editHero">
-              <label class="editAvatarPicker">
+              <input
+                ref="avatarInput"
+                type="file"
+                accept="image/*"
+                class="avatarFileInput"
+                @change="handleAvatarUpload"
+              />
+              <div class="editAvatarPicker" @click="pickAvatar">
                 <div v-if="avatarDataUrl" class="profileAvatar profileAvatar--edit">
                   <img :src="avatarDataUrl" alt="" class="profileAvatar__img" />
                 </div>
@@ -325,8 +343,7 @@ onMounted(() => {
                 <div class="editAvatarPicker__overlay">
                   <v-icon icon="mdi-camera-plus-outline" size="28" />
                 </div>
-                <input hidden type="file" accept="image/*" @change="handleAvatarUpload" />
-              </label>
+              </div>
             </section>
 
             <section class="settingsGrid settingsGrid--edit">
@@ -417,12 +434,12 @@ onMounted(() => {
   position: relative;
   overflow: hidden;
   padding: 34px 24px 26px;
-  border-radius: 32px;
+  border-radius: var(--radius-lg);
   background:
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.22), transparent 28%),
     radial-gradient(circle at bottom right, rgba(255, 255, 255, 0.2), transparent 26%),
-    linear-gradient(135deg, #9d77d8 0%, #8c6ed4 38%, #b386e0 100%);
-  box-shadow: 0 20px 44px rgba(140, 110, 212, 0.24);
+    linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  box-shadow: 0 18px 40px color-mix(in srgb, var(--accent) 26%, transparent);
   display: grid;
   justify-items: center;
   gap: 10px;
@@ -513,8 +530,8 @@ onMounted(() => {
 
 .settingsCard {
   border: 1px solid var(--border);
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.96);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
   box-shadow: var(--shadow-soft);
   padding: 20px;
 }
@@ -643,9 +660,27 @@ onMounted(() => {
   padding: 10px 0 4px;
 }
 
+.avatarFileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .editAvatarPicker {
-  position: relative;
+  border: 0;
+  background: transparent;
+  padding: 0;
   cursor: pointer;
+  position: relative;
+  width: 116px;
+  height: 116px;
+  border-radius: 50%;
 }
 
 .editAvatarPicker__overlay {
@@ -654,7 +689,7 @@ onMounted(() => {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: rgba(15, 23, 42, 0.26);
+  background: rgba(15, 23, 42, 0.24);
   color: #fff;
 }
 

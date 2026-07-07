@@ -450,10 +450,40 @@ function onReplyClick() {
 }
 
 .mbBubble.mine {
-  background: var(--accent-soft);
-  background: color-mix(in srgb, var(--accent) 18%, var(--surface-strong));
-  border-color: rgba(74, 144, 217, 0.24);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
   border-radius: 14px 14px 8px 14px;
+  color: var(--text);
+}
+
+html[data-theme='dark'] .mbBubble.mine {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+html[data-theme='dark'] .mbBubble.mine .mbMeta,
+html[data-theme='dark'] .mbBubble.mine .mbStatusSent,
+html[data-theme='dark'] .mbBubble.mine .mbEditedIcon,
+html[data-theme='dark'] .mbBubble.mine .mbViewsIcon {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+html[data-theme='dark'] .mbBubble.mine .mbStatusRead {
+  color: #fff;
+}
+
+html[data-theme='dark'] .mbBubble.mine .mbReplyAccent {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+html[data-theme='dark'] .mbBubble.mine .mbReplySender {
+  color: #fff;
+}
+
+html[data-theme='dark'] .mbBubble.mine .mbReplyPreview {
+  color: rgba(255, 255, 255, 0.78);
 }
 
 .mbBubbleContent {
@@ -586,7 +616,7 @@ function onReplyClick() {
 }
 
 .mbReplyAccent {
-  background: rgba(74, 144, 217, 0.55);
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .mbReplyBody {

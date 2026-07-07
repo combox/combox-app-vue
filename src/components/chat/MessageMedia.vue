@@ -233,7 +233,14 @@ function videoSizeStyle() {
     <span class="media-placeholder-label">{{ attachment.filename || 'video' }}</span>
   </div>
 
-  <AudioPlayer v-else-if="attachment.kind === 'audio'" :src="attachment.url" :poster="attachment.previewUrl" :pending="!attachment.url" />
+  <AudioPlayer
+    v-else-if="attachment.kind === 'audio'"
+    :src="attachment.url"
+    :poster="attachment.previewUrl"
+    :pending="!attachment.url"
+    :title="attachment.filename"
+    :duration-ms="attachment.durationMs"
+  />
 
   <a v-else-if="attachment.url" class="file-link" :href="attachment.url" target="_blank" rel="noreferrer">
     {{ attachment.filename || 'file' }}
