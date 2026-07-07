@@ -16,12 +16,12 @@ module.exports = (env, argv) => {
     process.env.VUE_API_BASE_URL ||
     process.env.VITE_API_BASE_URL ||
     process.env.PUBLIC_API_BASE_URL ||
-    'https://api.combox.local/api/private/v1'
+    '/api/private/v1'
   const wsBase =
     process.env.VUE_WS_BASE_URL ||
     process.env.VITE_WS_BASE_URL ||
     process.env.PUBLIC_WS_BASE_URL ||
-    'wss://api.combox.local/api/private/v1/ws'
+    `wss://${typeof window !== 'undefined' ? window.location.host : 'cb.neome.uk'}/api/private/v1/ws`
 
   return {
     mode,
