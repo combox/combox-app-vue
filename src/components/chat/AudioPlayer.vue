@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Hls from 'hls.js'
-import { useI18n } from '../i18n/i18n'
-import { parseAudioTags } from '../utils/audioTags'
+import { useI18n } from '../../i18n/i18n'
+import { parseAudioTags } from '../../utils/audioTags'
 
 const props = defineProps<{
   src: string
