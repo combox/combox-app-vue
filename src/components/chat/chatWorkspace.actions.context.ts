@@ -149,10 +149,17 @@ export function createContextActions(deps: CreateContextActionsInput) {
     deps.focusedInfoUserProfile.value = null
     deps.infoOpen.value = true
     deps.chatMenuAnchor.value = null
-if ((deps.selectedChat.value?.kind || '').trim() === 'standalone_channel') {
+    const kind = (deps.selectedChat.value?.kind || '').trim()
+    const role = (deps.selectedChat.value?.viewer_role || '').trim().toLowerCase()
+    if (kind === 'standalone_channel') {
       void deps.refreshSelectedChannel(deps.selectedChat.value?.id || '')
-      void deps.refreshRemovedChatMembers(deps.selectedChat.value?.id || '')
-      void deps.refreshSelectedChatInviteLinks(deps.selectedChat.value?.id || '')
+      if (role === 'owner' || role === 'admin') {
+        void deps.refreshRemovedChatMembers(deps.selectedChat.value?.id || '')
+        void deps.refreshSelectedChatInviteLinks(deps.selectedChat.value?.id || '')
+      } else {
+        deps.removedChatMembers.value = []
+        deps.selectedChatInviteLinks.value = []
+      }
       return
     }
     deps.removedChatMembers.value = []

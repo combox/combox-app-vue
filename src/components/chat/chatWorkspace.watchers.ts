@@ -41,10 +41,16 @@ export function setupWorkspaceWatchers(input: SetupWorkspaceWatchersInput) {
   })
 
   watch(
-    () => [input.selectedChat.value?.id, input.selectedChat.value?.is_direct] as const,
-    async ([chatID, isDirect]) => {
+    () => [input.selectedChat.value?.id, input.selectedChat.value?.is_direct, input.selectedChat.value?.kind, input.selectedChat.value?.viewer_role] as const,
+    async ([chatID, isDirect, kind, viewerRole]) => {
       const cleanChatID = (chatID || '').trim()
       if (!cleanChatID || isDirect) {
+        input.chatMembers.value = []
+        return
+      }
+      const isChannel = (kind || '').trim() === 'standalone_channel'
+      const role = (viewerRole || '').trim().toLowerCase()
+      if (isChannel && role !== 'owner' && role !== 'admin') {
         input.chatMembers.value = []
         return
       }

@@ -265,7 +265,11 @@ export function useChatWorkspace() {
 
       if (eventChatID) {
         if (eventChatID === selectedChatID.value && (type === 'chat.member_added' || type === 'chat.member_removed' || type === 'chat.updated')) {
-          void refreshChatMembers(eventChatID)
+          const isChannel = (selectedChat.value?.kind || '').trim() === 'standalone_channel'
+          const role = (selectedChat.value?.viewer_role || '').trim().toLowerCase()
+          if (!isChannel || role === 'owner' || role === 'admin') {
+            void refreshChatMembers(eventChatID)
+          }
         }
       }
 

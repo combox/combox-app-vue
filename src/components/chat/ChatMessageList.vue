@@ -705,7 +705,7 @@ watch(
 }
 
 .selBtn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--surface-soft-hover);
 }
 
 .selBtn.muted {

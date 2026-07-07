@@ -1457,7 +1457,7 @@ onBeforeUnmount(() => {
 }
 
 .workspace.info-open {
-  --info-dock-width: 370px;
+  --info-dock-width: min(370px, 40vw);
 }
 
 .wsSidebar {

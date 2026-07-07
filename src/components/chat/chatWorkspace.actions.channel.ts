@@ -30,14 +30,19 @@ export function createChannelActions(input: WorkspaceActionsInput) {
     try {
       const payload = await subscribeChannel(chatID)
       const currentCount = Number(active?.subscriber_count || 0)
+      const newRole = (payload.chat?.viewer_role || 'subscriber').trim().toLowerCase()
       input.patchChatLocally(chatID, {
         ...payload.chat,
         viewer_role: payload.chat?.viewer_role || 'subscriber',
         subscriber_count: payload.chat?.subscriber_count ?? Math.max(1, currentCount + 1),
       })
-      await input.refreshChatMembers(chatID)
-      if (input.infoOpen.value) {
-        await input.refreshSelectedChatInviteLinks(chatID)
+      if (newRole === 'owner' || newRole === 'admin') {
+        await input.refreshChatMembers(chatID)
+        if (input.infoOpen.value) {
+          await input.refreshSelectedChatInviteLinks(chatID)
+        }
+      } else {
+        input.chatMembers.value = []
       }
       await input.selectChat(chatID)
     } catch (error) {

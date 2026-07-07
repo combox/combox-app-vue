@@ -715,7 +715,9 @@ function openGroupSettings() {
 <style scoped>
 .ipRoot {
   width: 370px;
-  flex: 0 0 auto;
+  max-width: 100%;
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -1059,8 +1061,9 @@ html[data-theme='dark'] .ipMediaSkeleton {
 .ipManageInput {
   width: 100%;
   height: 36px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  background: #fff;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  color: var(--text);
   padding: 0 10px;
   outline: 0;
   font-size: 14px;

@@ -306,6 +306,16 @@ function onReplyClick() {
           :class="normalizedDeliveryStatus === 'read' ? 'mbStatusRead' : 'mbStatusSent'"
         />
       </footer>
+
+      <ReactionBar
+        v-if="Array.isArray(message.raw.reactions) && message.raw.reactions.length > 0"
+        :reactions="message.raw.reactions"
+        :current-user-id="currentUserId"
+        :current-user-avatar-src="currentUserAvatarSrc"
+        :avatar-by-user-id="avatarByUserId"
+        :can-react="canReact"
+        @react="onReact"
+      />
       </div>
     </div>
   </div>

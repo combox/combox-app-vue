@@ -308,8 +308,8 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
 .ep {
   width: 340px;
   height: 380px;
-  background: #fff;
-  border: 1px solid rgba(0,0,0,.1);
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: 0 8px 32px rgba(0,0,0,.12);
   display: flex;

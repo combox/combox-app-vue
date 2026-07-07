@@ -845,4 +845,16 @@ function copyText(value: string) {
     border-left: 0;
   }
 }
+
+@media (max-width: 420px) {
+  .gpSection {
+    padding: 10px 10px;
+  }
+  .gpInlineActions {
+    gap: 6px;
+  }
+  .gpMemberRow {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+}
 </style>

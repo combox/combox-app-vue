@@ -88,9 +88,10 @@ function attachSource() {
     hlsInstance.attachMedia(audio)
   } else {
     audio.src = props.src
+    audio.load()
   }
 
-  loadTags(props.src)
+  if (!isHlsSource(props.src)) loadTags(props.src)
 }
 
 function onLoadedMetadata(event: Event) {
@@ -139,6 +140,7 @@ onBeforeUnmount(() => {
       v-if="props.src"
       ref="audioRef"
       preload="metadata"
+      crossorigin="anonymous"
       @loadedmetadata="onLoadedMetadata"
       @durationchange="onDurationChange"
       @timeupdate="(event) => (time = (event.target as HTMLAudioElement).currentTime || 0)"
