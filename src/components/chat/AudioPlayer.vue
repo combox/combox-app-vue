@@ -140,7 +140,6 @@ onBeforeUnmount(() => {
       v-if="props.src"
       ref="audioRef"
       preload="metadata"
-      crossorigin="anonymous"
       @loadedmetadata="onLoadedMetadata"
       @durationchange="onDurationChange"
       @timeupdate="(event) => (time = (event.target as HTMLAudioElement).currentTime || 0)"

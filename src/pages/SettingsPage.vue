@@ -53,27 +53,25 @@ function removeAvatar() {
   avatarDirty.value = true
 }
 
-const avatarInput = ref<HTMLInputElement | null>(null)
-
 function pickAvatar() {
-  avatarInput.value?.click()
-}
-
-function handleAvatarUpload(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  if (!file.type.startsWith('image/')) return
-  const reader = new FileReader()
-  reader.onload = () => {
-    avatarDataUrl.value = typeof reader.result === 'string' ? reader.result : ''
-    avatarDirty.value = true
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/*'
+  input.onchange = () => {
+    const file = input.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      avatarDataUrl.value = typeof reader.result === 'string' ? reader.result : ''
+      avatarDirty.value = true
+    }
+    reader.onerror = () => {
+      errorText.value = t('settings.avatar_read_failed', undefined, 'Failed to read the image.')
+    }
+    reader.readAsDataURL(file)
   }
-  reader.onerror = () => {
-    errorText.value = t('settings.avatar_read_failed', undefined, 'Failed to read the image.')
-  }
-  reader.readAsDataURL(file)
+  input.click()
 }
 
 async function loadSettings() {
@@ -328,13 +326,6 @@ onMounted(() => {
 
           <template v-else>
             <section class="editHero">
-              <input
-                ref="avatarInput"
-                type="file"
-                accept="image/*"
-                class="avatarFileInput"
-                @change="handleAvatarUpload"
-              />
               <div class="editAvatarPicker" @click="pickAvatar">
                 <div v-if="avatarDataUrl" class="profileAvatar profileAvatar--edit">
                   <img :src="avatarDataUrl" alt="" class="profileAvatar__img" />
@@ -658,18 +649,6 @@ onMounted(() => {
   display: grid;
   justify-items: center;
   padding: 10px 0 4px;
-}
-
-.avatarFileInput {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 .editAvatarPicker {
