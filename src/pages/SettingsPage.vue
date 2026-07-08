@@ -57,8 +57,11 @@ function pickAvatar() {
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = 'image/*'
-  input.onchange = () => {
+  input.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1'
+  document.body.appendChild(input)
+  input.addEventListener('change', () => {
     const file = input.files?.[0]
+    input.remove()
     if (!file) return
     if (!file.type.startsWith('image/')) return
     const reader = new FileReader()
@@ -70,7 +73,7 @@ function pickAvatar() {
       errorText.value = t('settings.avatar_read_failed', undefined, 'Failed to read the image.')
     }
     reader.readAsDataURL(file)
-  }
+  }, { once: true })
   input.click()
 }
 

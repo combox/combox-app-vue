@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Hls from 'hls.js'
 import { useI18n } from '../../i18n/i18n'
-import { parseAudioTags } from '../../utils/audioTags'
 
 const props = defineProps<{
   src: string
@@ -19,13 +18,10 @@ const audioRef = ref<HTMLAudioElement | null>(null)
 const playing = ref(false)
 const duration = ref(0)
 const time = ref(0)
-const metaTitle = ref('')
-const metaArtist = ref('')
 let hlsInstance: Hls | null = null
-let tagController: AbortController | null = null
 
-const resolvedTitle = computed(() => metaTitle.value || props.title || '')
-const resolvedArtist = computed(() => metaArtist.value || props.artist || '')
+const resolvedTitle = computed(() => props.title || '')
+const resolvedArtist = computed(() => props.artist || '')
 
 const progress = computed(() => (duration.value > 0 ? (time.value / duration.value) * 100 : 0))
 
@@ -48,50 +44,46 @@ function destroyHls() {
   }
 }
 
-function abortTags() {
-  if (tagController) {
-    tagController.abort()
-    tagController = null
-  }
-}
-
-function loadTags(url: string) {
-  abortTags()
-  tagController = new AbortController()
-  parseAudioTags(url, tagController.signal)
-    .then((tags) => {
-      if (tags.title) metaTitle.value = tags.title
-      if (tags.artist) metaArtist.value = tags.artist
-    })
-    .catch(() => {})
-}
-
 function attachSource() {
   destroyHls()
   const audio = audioRef.value
   if (!audio || !props.src || props.pending) return
 
   if (isHlsSource(props.src) && Hls.isSupported()) {
-    hlsInstance = new Hls({ enableWorker: true, lowLatencyMode: false })
-    hlsInstance.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
-      if (data.levels && data.levels[0] && Number.isFinite(data.levels[0].duration)) {
-        duration.value = data.levels[0].duration
+    const hls = new Hls({ enableWorker: true, lowLatencyMode: false })
+    hlsInstance = hls
+
+    hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+      const level = data.levels?.[0]
+      if (level && Number.isFinite(level.duration) && level.duration > 0) {
+        duration.value = level.duration
+      } else if (props.durationMs && props.durationMs > 0) {
+        duration.value = props.durationMs / 1000
       }
     })
-    hlsInstance.on(Hls.Events.ERROR, (_event, data) => {
+
+    hls.on(Hls.Events.ERROR, (_event, data) => {
       if (data.fatal) {
-        hlsInstance?.destroy()
-        hlsInstance = null
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            hls.startLoad()
+            break
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            hls.recoverMediaError()
+            break
+          default:
+            destroyHls()
+            break
+        }
       }
     })
-    hlsInstance.loadSource(props.src)
-    hlsInstance.attachMedia(audio)
+
+    hls.attachMedia(audio)
+    hls.loadSource(props.src)
   } else {
     audio.src = props.src
     audio.load()
   }
-
-  if (!isHlsSource(props.src)) loadTags(props.src)
 }
 
 function onLoadedMetadata(event: Event) {
@@ -130,7 +122,6 @@ watch([() => props.src, () => props.pending], attachSource, { flush: 'post' })
 onMounted(attachSource)
 onBeforeUnmount(() => {
   destroyHls()
-  abortTags()
 })
 </script>
 
