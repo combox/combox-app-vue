@@ -1,9 +1,15 @@
 import { buildWsUrlWithFreshToken } from 'combox-api'
+import type { SearchUserResult } from 'combox-api'
 
 type StatusPayload = { status: string; userID: string; at?: string }
 type EventMeta = { type: string; chatID: string; messageID: string; id?: string }
-type MessageCreatedPayload = { chatID: string; senderUserID: string; messageID: string; muted?: boolean }
+type MessageCreatedPayload = { chatID: string; senderUserID: string; messageID: string; muted?: boolean; preview?: string }
 type PresencePayload = { userID: string; online: boolean; lastSeen?: string; lastSeenVisible?: boolean }
+type CallEventPayload = { callID: string; chatID: string; kind: string; startedBy: string; startedAt: string; reason?: string }
+
+export type ProfileUpdatePayload = { userID: string; user: SearchUserResult }
+export type TypingPayload = { chatID: string; userID: string }
+export type ChatUpdatedPayload = { chatID: string; chat: Record<string, unknown>; updatedAt?: string }
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -22,6 +28,11 @@ type UseChatRealtimeArgs = {
   onMessageCreated?: (payload: MessageCreatedPayload) => void
   onNotificationMessageCreated?: (payload: MessageCreatedPayload) => void
   onPresenceUpdate?: (payload: PresencePayload) => void
+  onTyping?: (payload: TypingPayload) => void
+  onProfileUpdate?: (payload: ProfileUpdatePayload) => void
+  onChatUpdated?: (payload: ChatUpdatedPayload) => void
+  onCallStarted?: (payload: CallEventPayload) => void
+  onCallEnded?: (payload: CallEventPayload) => void
   onConnectionStateChange?: (connected: boolean) => void
   onRequestResponse?: (id: string, payload: unknown) => void
 }
@@ -102,6 +113,29 @@ function readRealtimeStatus(payload: unknown): StatusPayload {
   return { status: status.trim().toLowerCase(), userID: userID.trim(), at: at.trim() || undefined }
 }
 
+function readTypingEvent(payload: unknown): TypingPayload {
+  const roots = [asObject(payload)].filter(Boolean) as Record<string, unknown>[]
+  if (roots.length > 0) {
+    const nested = [asObject(roots[0].event), asObject(roots[0].payload), asObject(roots[0].data)].filter(Boolean) as Record<string, unknown>[]
+    roots.push(...nested)
+  }
+  let chatID = ''
+  let userID = ''
+  for (const item of roots) {
+    if (!chatID) {
+      if (typeof item.chat_id === 'string') chatID = item.chat_id
+      else if (typeof item.chatId === 'string') chatID = item.chatId
+    }
+    if (!userID) {
+      if (typeof item.user_id === 'string') userID = item.user_id
+      else if (typeof item.userId === 'string') userID = item.userId
+      else if (typeof item.sender_user_id === 'string') userID = item.sender_user_id
+      else if (typeof item.senderUserId === 'string') userID = item.senderUserId
+    }
+  }
+  return { chatID: chatID.trim(), userID: userID.trim() }
+}
+
 function readMessageCreated(payload: unknown): MessageCreatedPayload {
   const roots = [asObject(payload)].filter(Boolean) as Record<string, unknown>[]
   if (roots.length > 0) {
@@ -112,6 +146,7 @@ function readMessageCreated(payload: unknown): MessageCreatedPayload {
   let chatID = ''
   let senderUserID = ''
   let messageID = ''
+  let preview = ''
   for (const item of roots) {
     if (!chatID) {
       if (typeof item.chat_id === 'string') chatID = item.chat_id
@@ -136,9 +171,20 @@ function readMessageCreated(payload: unknown): MessageCreatedPayload {
         if (message && typeof message.id === 'string') messageID = message.id
       }
     }
+    if (!preview) {
+      if (typeof item.preview === 'string') preview = item.preview
+      else if (typeof item.content === 'string') preview = item.content
+    }
   }
 
-  return { chatID: chatID.trim(), senderUserID: senderUserID.trim(), messageID: messageID.trim() }
+  const out: MessageCreatedPayload = {
+    chatID: chatID.trim(),
+    senderUserID: senderUserID.trim(),
+    messageID: messageID.trim(),
+  }
+  const cleanPreview = preview.trim()
+  if (cleanPreview) out.preview = cleanPreview
+  return out
 }
 
 function readPresence(payload: unknown): PresencePayload {
@@ -152,7 +198,7 @@ function readPresence(payload: unknown): PresencePayload {
   let online = false
   let hasOnline = false
   let lastSeen = ''
-  let lastSeenVisible = true
+  let lastSeenVisible: boolean | undefined
 
   for (const item of roots) {
     if (!userID) {
@@ -167,12 +213,76 @@ function readPresence(payload: unknown): PresencePayload {
     if (typeof item.last_seen_visible === 'boolean') lastSeenVisible = item.last_seen_visible
   }
 
-  return {
+  const out: PresencePayload = {
     userID: userID.trim(),
     online,
     lastSeen: lastSeen.trim() || undefined,
-    lastSeenVisible,
   }
+  // Absent frames must not overwrite the visibility fetched over REST.
+  if (lastSeenVisible !== undefined) out.lastSeenVisible = lastSeenVisible
+  return out
+}
+
+function readCallEvent(payload: unknown): CallEventPayload {
+  const roots = [asObject(payload)].filter(Boolean) as Record<string, unknown>[]
+  if (roots.length > 0) {
+    const nested = [asObject(roots[0].event), asObject(roots[0].payload), asObject(roots[0].data)].filter(Boolean) as Record<string, unknown>[]
+    roots.push(...nested)
+  }
+
+  let callID = ''
+  let chatID = ''
+  let kind = ''
+  let startedBy = ''
+  let startedAt = ''
+  let reason = ''
+  for (const item of roots) {
+    if (!callID) {
+      if (typeof item.call_id === 'string') callID = item.call_id
+      else if (typeof item.callID === 'string') callID = item.callID
+      else if (typeof item.id === 'string') callID = item.id
+    }
+    if (!chatID) {
+      if (typeof item.chat_id === 'string') chatID = item.chat_id
+      else if (typeof item.chatId === 'string') chatID = item.chatId
+    }
+    if (!kind && typeof item.kind === 'string') kind = item.kind
+    if (!startedBy) {
+      if (typeof item.started_by === 'string') startedBy = item.started_by
+      else if (typeof item.startedBy === 'string') startedBy = item.startedBy
+    }
+    if (!startedAt && typeof item.started_at === 'string') startedAt = item.started_at
+    if (!reason && typeof item.reason === 'string') reason = item.reason
+  }
+
+  return { callID, chatID, kind, startedBy, startedAt, reason }
+}
+
+function readProfileUpdate(payload: unknown): ProfileUpdatePayload | null {
+  const root = asObject(payload)
+  if (!root) return null
+  const nested = asObject(root.event) ?? asObject(root.payload) ?? asObject(root.data)
+  const profile = asObject(root.profile) ?? asObject(root.user) ?? nested ?? root
+  let userID = ''
+  if (typeof root.user_id === 'string') userID = root.user_id
+  if (!userID && typeof profile.user_id === 'string') userID = profile.user_id
+  if (!userID && typeof profile.id === 'string') userID = profile.id
+  userID = userID.trim()
+  if (!userID) return null
+  return { userID, user: profile as unknown as SearchUserResult }
+}
+
+function readChatUpdated(payload: unknown): ChatUpdatedPayload | null {
+  const root = asObject(payload)
+  if (!root) return null
+  const chat = asObject(root.chat)
+  let chatID = ''
+  if (typeof root.chat_id === 'string') chatID = root.chat_id
+  if (!chatID && chat && typeof chat.id === 'string') chatID = chat.id
+  chatID = chatID.trim()
+  if (!chatID || !chat) return null
+  const updatedAt = typeof root.updated_at === 'string' ? root.updated_at : undefined
+  return { chatID, chat, updatedAt }
 }
 
 export function useChatRealtime(args: UseChatRealtimeArgs) {
@@ -221,6 +331,29 @@ export function useChatRealtime(args: UseChatRealtimeArgs) {
     const body = asObject(payload)
     runtime.socket.send(JSON.stringify({ type, ...body }))
     return true
+  }
+
+  // A tab restored from bfcache (or woken after a freeze) can lose its socket
+  // without ever firing `close`, leaving wsConnected stale and presence dead.
+  const ensureConnected = () => {
+    if (runtime.stopped) return
+    const state = runtime.socket ? runtime.socket.readyState : WebSocket.CLOSED
+    if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return
+    const stale = runtime.socket
+    runtime.socket = null
+    if (stale) {
+      stale.onopen = null
+      stale.onmessage = null
+      stale.onerror = null
+      stale.onclose = null
+      try {
+        stale.close()
+      } catch {
+        // ignore
+      }
+    }
+    runtime.reconnectDelay = 500
+    void start()
   }
 
   const scheduleReconnect = () => {
@@ -276,9 +409,29 @@ export function useChatRealtime(args: UseChatRealtimeArgs) {
           if (created.chatID) args.onNotificationMessageCreated({ ...created, muted })
         }
       }
+      if (type === 'call.started' && args.onCallStarted) {
+        const call = readCallEvent(payload)
+        if (call.callID || call.chatID) args.onCallStarted(call)
+      }
+      if (type === 'call.ended' && args.onCallEnded) {
+        const call = readCallEvent(payload)
+        if (call.callID || call.chatID) args.onCallEnded(call)
+      }
+      if (type === 'typing' && args.onTyping) {
+        const typing = readTypingEvent(payload)
+        if (typing.chatID && typing.userID) args.onTyping(typing)
+      }
       if (type === 'presence.update' && args.onPresenceUpdate) {
         const presence = readPresence(payload)
         if (presence.userID) args.onPresenceUpdate(presence)
+      }
+      if (type === 'profile.update' && args.onProfileUpdate) {
+        const update = readProfileUpdate(payload)
+        if (update) args.onProfileUpdate(update)
+      }
+      if (type === 'chat.updated' && args.onChatUpdated) {
+        const update = readChatUpdated(payload)
+        if (update) args.onChatUpdated(update)
       }
       if (type === 'message.deleted' && chatID && messageID && chatID === args.getSelectedChatID()) {
         args.onMessageDeleted(messageID, chatID)
@@ -317,7 +470,14 @@ export function useChatRealtime(args: UseChatRealtimeArgs) {
     try {
       const forceRefresh = runtime.wsAttempt > 0 && runtime.wsAttempt % 3 === 0
       const wsURL = await buildWsUrlWithFreshToken(undefined, forceRefresh)
-      if (runtime.stopped || !wsURL) return
+      if (runtime.stopped) return
+      if (!wsURL) {
+        // No URL yet (session still refreshing / backend briefly unreachable).
+        // Keep retrying instead of silently giving up on the connection.
+        runtime.wsAttempt += 1
+        scheduleReconnect()
+        return
+      }
       const socket = new WebSocket(wsURL)
       runtime.socket = socket
       socket.onopen = () => {
@@ -364,5 +524,5 @@ export function useChatRealtime(args: UseChatRealtimeArgs) {
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) socket.close()
   }
 
-  return { start, stop, sendRequest, sendEvent }
+  return { start, stop, sendRequest, sendEvent, ensureConnected }
 }

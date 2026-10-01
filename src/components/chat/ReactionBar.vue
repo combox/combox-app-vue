@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { canonicalEmojiKey } from './reactionEmoji'
+import { avatarColorFor } from '../../utils/avatarColor'
+
 type Reaction = {
   emoji: string
   count?: number
@@ -13,6 +16,8 @@ const props = defineProps<{
   currentUserAvatarSrc?: string
   avatarByUserId?: Record<string, string>
   canReact?: boolean
+  /** Channels keep the numeric tally; DMs/groups show only who reacted. */
+  showCount?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -23,22 +28,46 @@ const normalized = computed(() => {
   const me = (props.currentUserId || '').trim()
   const avatars = props.avatarByUserId || {}
   const myAvatar = (props.currentUserAvatarSrc || '').trim()
-  return props.reactions.map((item) => {
+
+  const groups = new Map<string, { emoji: string; userIds: Set<string>; count: number; mine: boolean }>()
+
+  props.reactions.forEach((item) => {
+    const key = canonicalEmojiKey(item.emoji)
+    if (!key) return
     const userIds = Array.isArray(item.user_ids)
       ? item.user_ids
           .map((id) => (typeof id === 'string' ? id.trim() : ''))
           .filter(Boolean)
       : []
-    const count = typeof item.count === 'number' && item.count > 0 ? item.count : userIds.length
-    const mine = Boolean(me && userIds.includes(me))
-    const showAvatars = userIds.length > 0 && count > 0 && count <= 2
+    const rawCount = typeof item.count === 'number' && item.count > 0 ? item.count : userIds.length
+    const group = groups.get(key)
+    if (!group) {
+      groups.set(key, {
+        emoji: item.emoji,
+        userIds: new Set(userIds),
+        count: rawCount,
+        mine: Boolean(me && userIds.includes(me)),
+      })
+      return
+    }
+    for (const id of userIds) group.userIds.add(id)
+    group.count += rawCount
+    if (me && userIds.includes(me)) group.mine = true
+  })
+
+  return [...groups.values()].map((group) => {
+    const userIds = [...group.userIds]
+    const count = Math.max(group.count, userIds.length)
+    const mine = group.mine || Boolean(me && userIds.includes(me))
+    const showAvatars = !props.showCount && userIds.length > 0
     const avatarItems = showAvatars
-      ? userIds.slice(0, 2).map((id) => ({
+      ? userIds.slice(0, 4).map((id) => ({
           id,
           src: (id === me ? myAvatar : '') || avatars[id] || '',
         }))
       : []
-    return { emoji: item.emoji, count, mine, showAvatars, avatarItems }
+    const showBadge = Boolean(props.showCount) || userIds.length === 0
+    return { emoji: group.emoji, count, mine, showAvatars, showBadge, avatarItems }
   })
 })
 
@@ -55,21 +84,20 @@ const normalized = computed(() => {
       :disabled="canReact === false"
       @click="canReact !== false && emit('react', item.emoji)"
     >
+      <span class="emoji rbEmoji">{{ item.emoji }}</span>
+      <span v-if="item.showBadge && item.count > 0" class="rbCount">{{ item.count }}</span>
       <template v-if="item.showAvatars">
         <v-avatar
           v-for="avatar in item.avatarItems"
           :key="avatar.id"
-          size="18"
-          rounded="0"
-          color="grey-lighten-2"
+          size="20"
           class="rbAvatar"
+          :style="{ background: avatarColorFor(avatar.id) }"
         >
           <img v-if="avatar.src" class="rbAvatarImg" :src="avatar.src" alt="" />
-          <span v-else>{{ (avatar.id || '?').slice(0, 1).toUpperCase() }}</span>
+          <span v-else class="rbAvatarFallback">{{ (avatar.id || '?').slice(0, 1).toUpperCase() }}</span>
         </v-avatar>
       </template>
-      <span class="emoji rbEmoji">{{ item.emoji }}</span>
-      <span v-if="item.count > 1" class="rbCount">{{ item.count }}</span>
     </button>
 
   </div>
@@ -81,12 +109,14 @@ const normalized = computed(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .rbBtn,
 .rbAdd {
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
+  background: var(--surface-strong);
   border-radius: 999px;
   height: 26px;
   padding: 0 8px;
@@ -104,12 +134,15 @@ const normalized = computed(() => {
 }
 
 .rbAvatar {
-  margin-left: -4px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-strong);
+  border-radius: 50%;
+  background: var(--avatar-fallback);
+  overflow: hidden;
+  flex: 0 0 auto;
 }
 
-.rbBtn .rbAvatar:first-child {
-  margin-left: 0;
+.rbAvatar + .rbAvatar {
+  margin-left: -9px;
 }
 
 .rbAvatarImg {
@@ -119,9 +152,16 @@ const normalized = computed(() => {
   display: block;
 }
 
+.rbAvatarFallback {
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .rbBtn.mine {
-  border-color: rgba(74, 144, 217, 0.42);
-  background: var(--accent-soft);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 26%, var(--surface-strong));
 }
 
 .rbCount {
@@ -131,5 +171,7 @@ const normalized = computed(() => {
 
 .rbEmoji {
   line-height: 1;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', 'NotoColorEmoji',
+    sans-serif;
 }
 </style>

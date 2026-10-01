@@ -1,5 +1,5 @@
 import 'vuetify/styles'
-import '@mdi/font/css/materialdesignicons.css'
+import './mdi-subset.css'
 import { createVuetify } from 'vuetify'
 import {
   VAlert,

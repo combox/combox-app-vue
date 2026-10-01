@@ -57,4 +57,5 @@ export type WorkspaceActionsInput = {
   persistGroupSelection: () => void
   clearHash: () => void
   patchChatLocally: (chatID: string, patch: Partial<ChatItem>) => void
+  resolvePendingDirectChat: (pendingID: string) => Promise<string>
 }

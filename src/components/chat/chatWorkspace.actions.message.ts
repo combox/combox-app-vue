@@ -1,22 +1,30 @@
 import type { Ref } from 'vue'
-import { editMessage, encodeAttachmentToken, getAttachment, markMessageRead, parseMessageContent, sendMessage, toggleMessageReaction } from 'combox-api'
+import { attachmentFlagsFromMeta, editMessage, encodeAttachmentToken, getAttachment, markMessageRead, parseMessageContent, sendMessage, setAttachmentMeta, toggleMessageReaction } from 'combox-api'
 import { mediaPipelineClient } from '../../lib/mediaPipeline/client'
 import { hydrateAttachmentURLs } from './chatWorkspace.attachments'
-import { MSG_CACHE_PREFIX, STATUS_CACHE_PREFIX, STATUS_GLOBAL_CACHE_KEY } from './chatWorkspace.constants'
+import { MSG_CACHE_PREFIX, PENDING_CHAT_PREFIX, STATUS_CACHE_PREFIX, STATUS_GLOBAL_CACHE_KEY } from './chatWorkspace.constants'
 import { readJSON, writeJSON } from './chatWorkspace.storage'
 import { enqueueOutbox, isOfflineError } from '../../lib/offline/outbox'
+import { resolveReactionEmoji } from './reactionEmoji'
 import type { MessageStatus } from './chatWorkspace.types'
 import type { WorkspaceActionsInput } from './chatWorkspace.actions.shared'
 
 export function createMessageActions(input: WorkspaceActionsInput) {
   async function sendDraft(draft: string) {
-    const chatID = input.activeMessagesChatID.value
+    let chatID = input.activeMessagesChatID.value
     const text = draft.trim()
     if (!chatID) return false
 
     input.sending.value = true
     input.errorText.value = ''
     try {
+      // A conversation opened from search stays pending until the first
+      // message: create the real chat now and send to it.
+      if (chatID.startsWith(PENDING_CHAT_PREFIX)) {
+        const resolved = await input.resolvePendingDirectChat(chatID)
+        if (!resolved) throw new Error(input.t('chat.start_chat_failed'))
+        chatID = resolved
+      }
       const existingAttachmentIDs = input.editingMessage.value
         ? parseMessageContent(input.editingMessage.value.raw.content || '').attachments.map((item) => item.id).filter(Boolean)
         : []
@@ -42,6 +50,13 @@ export function createMessageActions(input: WorkspaceActionsInput) {
               input.pendingFiles.value = input.pendingFiles.value.map((item) => (item.id === pending.id ? { ...item, progress: percent } : item))
             },
           })
+          if (pending.meta) {
+            try {
+              await setAttachmentMeta(up.attachment.id, pending.meta)
+            } catch {
+              // metadata is optional: playback still works without waveform/duration
+            }
+          }
           return {
             id: up.attachment.id,
             token: encodeAttachmentToken({
@@ -49,10 +64,39 @@ export function createMessageActions(input: WorkspaceActionsInput) {
               filename: up.attachment.filename,
               mimeType: up.attachment.mime_type,
               kind: up.attachment.kind,
+              flags: attachmentFlagsFromMeta(pending.meta),
             }),
+            details: up,
+            meta: pending.meta,
           }
         }),
       )
+
+      // The upload already returned everything the bubble needs. Seed the
+      // attachment map with it so a just-sent file shows mime/size/preview
+      // immediately and stays complete even if the follow-up lookup fails.
+      if (uploaded.length > 0) {
+        const seeded: Record<string, (typeof input.urlsByAttachment.value)[string]> = {}
+        for (const item of uploaded) {
+          const attachment = item.details.attachment
+          const meta = item.meta
+          seeded[item.id] = {
+            url: item.details.url,
+            previewUrl: item.details.previewUrl || '',
+            width: attachment.width || 0,
+            height: attachment.height || 0,
+            durationMs:
+              attachment.duration_ms || Number(meta?.duration_ms) || Number(attachment.user_meta?.duration_ms) || 0,
+            sizeBytes: attachment.size_bytes || 0,
+            mimeType: attachment.mime_type || '',
+            filename: attachment.filename || '',
+            userMeta: { ...(attachment.user_meta || {}), ...(meta || {}) },
+            fetchedAt: Date.now(),
+            failedAt: 0,
+          }
+        }
+        input.urlsByAttachment.value = { ...input.urlsByAttachment.value, ...seeded }
+      }
 
       const attachmentTokens = uploaded.length > 0
         ? uploaded.map((item) => item.token)
@@ -63,6 +107,7 @@ export function createMessageActions(input: WorkspaceActionsInput) {
                 filename: item.filename,
                 mimeType: item.mimeType,
                 kind: item.kind,
+                flags: item.flags,
               }),
             )
           : []
@@ -133,13 +178,15 @@ export function createMessageActions(input: WorkspaceActionsInput) {
   }
 
   async function reactToMessage(messageID: string, emoji: string) {
+    const target = input.rawMessages.value.find((item) => item.id === messageID)
+    const resolved = resolveReactionEmoji(target?.reactions, emoji, input.currentUser?.id || '')
     try {
-      const result = await toggleMessageReaction(messageID, emoji)
+      const result = await toggleMessageReaction(messageID, resolved)
       input.rawMessages.value = input.rawMessages.value.map((item) => (item.id === messageID ? { ...item, reactions: result.reactions || [] } : item))
       if (input.activeMessagesChatID.value) writeJSON(`${MSG_CACHE_PREFIX}${input.activeMessagesChatID.value}`, input.rawMessages.value)
     } catch (error) {
       if (isOfflineError(error)) {
-        enqueueOutbox({ type: 'toggleReaction', messageID, emoji })
+        enqueueOutbox({ type: 'toggleReaction', messageID, emoji: resolved })
         return
       }
       input.errorText.value = error instanceof Error ? error.message : input.t('chat.reaction_failed')

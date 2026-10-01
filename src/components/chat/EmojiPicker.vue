@@ -316,6 +316,7 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
   flex-direction: column;
   overflow: hidden;
   font-family: inherit;
+  animation: uiPopIn 140ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 
 /* ── Body (grows, holds scroll) ─────────────────────────────────────────────── */
@@ -502,5 +503,12 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
 .ep-tab.active {
   background: rgba(74,144,217,.12);
   color: #4a90d9;
+}
+@keyframes uiPopIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ep { animation: none; }
 }
 </style>

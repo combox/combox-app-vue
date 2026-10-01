@@ -7,7 +7,7 @@ export function createGroupActions(input: WorkspaceActionsInput) {
     if (!cleanTitle) return
     const cleanMemberIDs = Array.from(new Set(memberIDs.map((id) => (id || '').trim()).filter(Boolean)))
     try {
-      const payload = await createChat({ title: cleanTitle, member_ids: cleanMemberIDs, type: 'standard' })
+      const payload = await createChat({ title: cleanTitle, member_ids: cleanMemberIDs, type: 'standard', kind: 'group' })
       await input.loadChats()
       if (payload.chat?.id) {
         await input.selectChat(payload.chat.id)

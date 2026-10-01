@@ -1,726 +1,353 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { ComboxClient, type ProfileUpdateInput } from 'combox-api'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ComboxClient } from 'combox-api'
 import PageShell from '../components/core/PageShell.vue'
+import TGRow from '../components/settings/TGRow.vue'
+import MyAccountSettings from '../components/settings/MyAccountSettings.vue'
+import NotificationsSettings from '../components/settings/NotificationsSettings.vue'
+import PrivacySecuritySettings from '../components/settings/PrivacySecuritySettings.vue'
+import ChatSettings from '../components/settings/ChatSettings.vue'
+import FoldersSettings from '../components/settings/FoldersSettings.vue'
+import RecommendedFolders from '../components/settings/RecommendedFolders.vue'
+import AdvancedSettings from '../components/settings/AdvancedSettings.vue'
+import PowerSavingSettings from '../components/settings/PowerSavingSettings.vue'
+import LanguageSettings from '../components/settings/LanguageSettings.vue'
+import AboutSettings from '../components/settings/AboutSettings.vue'
+import AvatarViewer from '../components/core/AvatarViewer.vue'
+import { APP_VERSION } from '../components/settings/aboutMeta'
+import { useUserSettings } from '../components/settings/userSettingsMeta'
+import {
+  applyInterfaceScale,
+  applyPowerSaving,
+  loadInterfaceScale,
+  loadPowerSaving,
+  saveInterfaceScale,
+  syncNotificationBridge,
+} from '../components/settings/settingsEffects'
 import { useI18n } from '../i18n/i18n'
 import { normalizeAvatarSrc } from '../utils/avatar'
+import '../components/settings/settingsShared.css'
 
-const USERNAME_RE = /^[a-z0-9_]{4,32}$/
+type Page =
+  | 'main'
+  | 'account'
+  | 'notifications'
+  | 'privacy'
+  | 'chat'
+  | 'folders'
+  | 'advanced'
+  | 'power'
+  | 'language'
+  | 'about'
+
+const router = useRouter()
+const route = useRoute()
+const { t, locale } = useI18n()
 const client = new ComboxClient()
-const { t } = useI18n()
+const userSettings = useUserSettings()
 
-const loading = ref(true)
-const saving = ref(false)
-const editMode = ref(false)
-const errorText = ref('')
-const notice = ref('')
+const page = ref<Page>('main')
+const foldersKey = ref(0)
+const privacyRef = ref<{ goBack: () => boolean } | null>(null)
+
+const avatarSrc = ref('')
+const displayName = ref('')
 const username = ref('')
-const firstName = ref('')
-const lastName = ref('')
-const birthDate = ref('')
-const email = ref('')
-const avatarDataUrl = ref('')
-const avatarDirty = ref(false)
-const showLastSeen = ref(true)
-const emailBusy = ref(false)
-const oldCode = ref('')
-const oldVerified = ref(false)
-const newEmail = ref('')
-const newCode = ref('')
-const emailError = ref('')
+
+const scaleEnabled = ref(false)
+const scalePercent = ref(100)
 
 const initials = computed(() => {
-  const first = firstName.value.trim().slice(0, 1).toUpperCase()
-  const last = lastName.value.trim().slice(0, 1).toUpperCase()
-  return `${first}${last}`.trim() || (username.value.trim().slice(0, 1).toUpperCase() || '?')
+  const parts = displayName.value.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return (username.value.trim().slice(0, 1).toUpperCase() || '?')
+  if (parts.length === 1) return (parts[0] || '?').slice(0, 1).toUpperCase()
+  return `${(parts[0] || '').slice(0, 1)}${(parts[1] || '').slice(0, 1)}`.toUpperCase()
 })
 
-const displayName = computed(() => `${firstName.value} ${lastName.value}`.trim() || username.value || t('settings.title'))
-const birthdayText = computed(() => {
-  const raw = birthDate.value.trim()
-  if (!raw) return '—'
-  const parsed = new Date(raw)
-  if (Number.isNaN(parsed.getTime())) return raw
-  return parsed.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
+const languageLabel = computed(() => (locale.value === 'ru' ? 'Русский' : 'English'))
+
+const pageTitle = computed(() => {
+  switch (page.value) {
+    case 'account':
+      return t('settings.tg.account.title', undefined, 'My Account')
+    case 'notifications':
+      return t('settings.notifications_nav', undefined, 'Notifications and Sounds')
+    case 'privacy':
+      return t('settings.privacy', undefined, 'Privacy & security')
+    case 'chat':
+      return t('settings.tg.chat.title', undefined, 'Chat Settings')
+    case 'folders':
+      return t('settings.folders', undefined, 'Folders')
+    case 'advanced':
+      return t('settings.tg.advanced.title', undefined, 'Advanced')
+    case 'power':
+      return t('settings.tg.power.nav', undefined, 'Battery and Animations')
+    case 'language':
+      return t('common.language', undefined, 'Language')
+    case 'about':
+      return t('settings.about_combox', undefined, 'About ComBox')
+    default:
+      return t('settings.title', undefined, 'Settings')
+  }
 })
 
-function handleUsernameInput(value: string) {
-  username.value = value.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 32)
+function openPage(next: Page): void {
+  page.value = next
 }
 
-function removeAvatar() {
-  avatarDataUrl.value = ''
-  avatarDirty.value = true
+// Deep link for the chat sidebar hamburger menu (/settings?section=account):
+// it must land directly in the TG-style account editor, reusing this page
+// instead of the removed sidebar settings pane.
+const SECTION_PAGES: Record<string, Page> = {
+  main: 'main',
+  account: 'account',
+  notifications: 'notifications',
+  privacy: 'privacy',
+  chat: 'chat',
+  folders: 'folders',
+  advanced: 'advanced',
+  power: 'power',
+  language: 'language',
+  about: 'about',
 }
 
-function pickAvatar() {
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = 'image/*'
-  input.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1'
-  document.body.appendChild(input)
-  input.addEventListener('change', () => {
-    const file = input.files?.[0]
-    input.remove()
-    if (!file) return
-    if (!file.type.startsWith('image/')) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      avatarDataUrl.value = typeof reader.result === 'string' ? reader.result : ''
-      avatarDirty.value = true
-    }
-    reader.onerror = () => {
-      errorText.value = t('settings.avatar_read_failed', undefined, 'Failed to read the image.')
-    }
-    reader.readAsDataURL(file)
-  }, { once: true })
-  input.click()
+function applySectionFromRoute(): void {
+  const raw = route.query.section
+  const key = (Array.isArray(raw) ? raw[0] : raw || '').toString().trim().toLowerCase()
+  if (key && SECTION_PAGES[key]) page.value = SECTION_PAGES[key]
 }
 
-async function loadSettings() {
-  loading.value = true
-  errorText.value = ''
-  try {
-    const [profile, settings] = await Promise.all([client.getProfile(), client.getProfileSettings()])
-    username.value = profile.username || ''
-    firstName.value = profile.first_name || ''
-    lastName.value = profile.last_name || ''
-    birthDate.value = profile.birth_date || ''
-    email.value = profile.email || ''
-    showLastSeen.value = settings.show_last_seen ?? true
-    avatarDataUrl.value = normalizeAvatarSrc(profile.avatar_data_url || '')
-    avatarDirty.value = false
-  } catch (error) {
-    errorText.value = error instanceof Error ? error.message : t('settings.load_failed')
-  } finally {
-    loading.value = false
-  }
-}
+watch(
+  () => route.query.section,
+  () => applySectionFromRoute(),
+)
 
-async function handleSaveProfile() {
-  saving.value = true
-  errorText.value = ''
-  notice.value = ''
-  const normalizedUsername = username.value.trim().toLowerCase()
-  if (!USERNAME_RE.test(normalizedUsername)) {
-    saving.value = false
-    errorText.value = t('auth.error_username_invalid')
+function goBack(): void {
+  if (page.value === 'privacy' && privacyRef.value?.goBack()) return
+  if (page.value !== 'main') {
+    page.value = 'main'
     return
   }
-  if (!firstName.value.trim()) {
-    saving.value = false
-    errorText.value = t('auth.error_first_name_required')
-    return
-  }
-
-  const payload: ProfileUpdateInput = {
-    username: normalizedUsername,
-    first_name: firstName.value.trim(),
-    last_name: lastName.value.trim(),
-    birth_date: birthDate.value.trim(),
-  }
-  if (avatarDirty.value) payload.avatar_data_url = avatarDataUrl.value.trim()
-
-  try {
-    const updated = await client.updateProfile(payload)
-    username.value = updated.username || ''
-    firstName.value = updated.first_name || ''
-    lastName.value = updated.last_name || ''
-    birthDate.value = updated.birth_date || ''
-    email.value = updated.email || ''
-    avatarDirty.value = false
-    notice.value = t('settings.profile_saved')
-    editMode.value = false
-  } catch (error) {
-    errorText.value = error instanceof Error ? error.message : t('settings.profile_update_failed')
-  } finally {
-    saving.value = false
-  }
+  void router.push('/')
 }
 
-async function handleShowLastSeenChange(next: boolean | null) {
-  if (next === null) return
-  const prev = showLastSeen.value
-  showLastSeen.value = next
+function close(): void {
+  void router.push('/')
+}
+
+function onScaleToggle(next: boolean | null): void {
+  scaleEnabled.value = next === true
+  saveInterfaceScale({ enabled: scaleEnabled.value, percent: scalePercent.value })
+}
+
+function onScalePercent(next: number): void {
+  scalePercent.value = Math.max(80, Math.min(150, Math.round(next) || 100))
+  saveInterfaceScale({ enabled: scaleEnabled.value, percent: scalePercent.value })
+}
+
+async function loadHeader(): Promise<void> {
   try {
-    await client.updateProfileSettings(next)
+    const data = await client.getProfile()
+    avatarSrc.value = normalizeAvatarSrc(data.avatar_data_url || '')
+    username.value = data.username || ''
+    const full = `${data.first_name || ''} ${data.last_name || ''}`.trim()
+    displayName.value = full || (data.username ? `@${data.username}` : '')
   } catch {
-    showLastSeen.value = prev
-  }
-}
-
-async function handleSendOldCode() {
-  emailBusy.value = true
-  emailError.value = ''
-  try {
-    await client.startEmailChange()
-  } catch (error) {
-    emailError.value = error instanceof Error ? error.message : t('settings.send_code_failed')
-  } finally {
-    emailBusy.value = false
-  }
-}
-
-async function handleVerifyOldCode() {
-  emailBusy.value = true
-  emailError.value = ''
-  try {
-    const ok = await client.verifyOldEmailCode(oldCode.value.trim())
-    oldVerified.value = ok
-    if (!ok) emailError.value = t('auth.error_code_invalid')
-  } catch (error) {
-    emailError.value = error instanceof Error ? error.message : t('settings.verify_code_failed')
-  } finally {
-    emailBusy.value = false
-  }
-}
-
-async function handleSendNewCode() {
-  emailBusy.value = true
-  emailError.value = ''
-  try {
-    await client.sendNewEmailCode(newEmail.value.trim().toLowerCase())
-  } catch (error) {
-    emailError.value = error instanceof Error ? error.message : t('settings.send_code_failed')
-  } finally {
-    emailBusy.value = false
-  }
-}
-
-async function handleConfirmNewEmail() {
-  emailBusy.value = true
-  emailError.value = ''
-  try {
-    const updated = await client.confirmEmailChange(newCode.value.trim())
-    email.value = updated.email || ''
-    oldVerified.value = false
-    oldCode.value = ''
-    newEmail.value = ''
-    newCode.value = ''
-    notice.value = t('settings.email_changed')
-  } catch (error) {
-    emailError.value = error instanceof Error ? error.message : t('settings.email_change_failed')
-  } finally {
-    emailBusy.value = false
+    // The header stays placeholder; every section loads and reports on its own.
   }
 }
 
 onMounted(() => {
-  void loadSettings()
+  const scale = loadInterfaceScale()
+  scaleEnabled.value = scale.enabled
+  scalePercent.value = scale.percent
+  applyInterfaceScale(scale)
+  applyPowerSaving(loadPowerSaving())
+  applySectionFromRoute()
+  void loadHeader()
+  // Push the server master into the live runtime gate as early as possible.
+  void userSettings.load().then(() => syncNotificationBridge(userSettings.values))
 })
 </script>
 
 <template>
   <PageShell>
-    <v-container class="settingsPage py-6" style="max-width: 960px">
-      <v-progress-linear v-if="loading" indeterminate />
-
-      <template v-else>
-        <section class="settingsShell">
-          <header class="settingsTopbar">
-            <div class="settingsTopbar__title">{{ editMode ? t('settings.edit_profile', undefined, 'Edit profile') : t('settings.title') }}</div>
-            <div class="settingsTopbar__actions">
-              <button v-if="editMode" type="button" class="settingsIconBtn" @click="editMode = false">
+    <div class="hub">
+      <section class="hubContent">
+        <div class="hubBody hubBody--narrow">
+          <template v-if="page === 'main'">
+            <header class="tgTopbar">
+              <button type="button" class="tgTopbarBtn" :aria-label="t('settings.back', undefined, 'Back')" @click="goBack">
                 <v-icon icon="mdi-arrow-left" size="18" />
               </button>
-              <button v-else type="button" class="settingsIconBtn" @click="editMode = true">
-                <v-icon icon="mdi-pencil-outline" size="18" />
+              <div class="tgTopbarTitle">{{ pageTitle }}</div>
+              <button type="button" class="tgTopbarBtn" :aria-label="t('common.close', undefined, 'Close')" @click="close">
+                <v-icon icon="mdi-close" size="18" />
               </button>
-            </div>
-          </header>
-
-          <v-alert v-if="errorText" type="error" class="mb-4">{{ errorText }}</v-alert>
-          <v-alert v-if="notice" type="success" class="mb-4">{{ notice }}</v-alert>
-
-          <template v-if="!editMode">
-            <section class="profileHero">
-              <div class="profileHero__ornament profileHero__ornament--left" />
-              <div class="profileHero__ornament profileHero__ornament--right" />
-              <div v-if="avatarDataUrl" class="profileAvatar">
-                <img :src="avatarDataUrl" alt="" class="profileAvatar__img" />
+            </header>
+            <section class="tgHero">
+              <span class="tgHeroAvatar">
+                <img v-if="avatarSrc" :src="avatarSrc" alt="" class="tgHeroAvatarImg" />
+                <span v-else>{{ initials }}</span>
+              </span>
+              <div class="tgHeroMain">
+                <div class="tgHeroName">{{ displayName || t('settings.title', undefined, 'Settings') }}</div>
+                <div class="tgHeroSub">@{{ username || 'username' }}</div>
+                <div class="tgHeroStatus">{{ t('settings.status_online', undefined, 'Active & running') }}</div>
               </div>
-              <div v-else class="profileAvatar profileAvatar--fallback">{{ initials }}</div>
-              <div class="profileHero__name">{{ displayName }}</div>
-              <div class="profileHero__status">{{ showLastSeen ? t('presence.online') : t('presence.offline') }}</div>
             </section>
 
-            <section class="settingsGrid">
-              <article class="settingsCard settingsCard--info">
-                <div class="settingsCard__title">{{ t('settings.profile') }}</div>
-                <div class="infoList">
-                  <div class="infoRow">
-                    <div class="infoRow__icon"><v-icon icon="mdi-at" size="18" /></div>
-                    <div class="infoRow__body">
-                      <div class="infoRow__value">@{{ username || 'username' }}</div>
-                      <div class="infoRow__label">{{ t('settings.username') }}</div>
-                    </div>
-                  </div>
-                  <div class="infoRow">
-                    <div class="infoRow__icon"><v-icon icon="mdi-email-outline" size="18" /></div>
-                    <div class="infoRow__body">
-                      <div class="infoRow__value">{{ email || '—' }}</div>
-                      <div class="infoRow__label">{{ t('settings.email') }}</div>
-                    </div>
-                  </div>
-                  <div class="infoRow">
-                    <div class="infoRow__icon"><v-icon icon="mdi-cake-variant-outline" size="18" /></div>
-                    <div class="infoRow__body">
-                      <div class="infoRow__value">{{ birthdayText }}</div>
-                      <div class="infoRow__label">{{ t('settings.birth_date') }}</div>
-                    </div>
-                  </div>
+            <section class="tgCard">
+              <TGRow
+                icon="mdi-account-circle-outline"
+                :title="t('settings.tg.account.title', undefined, 'My Account')"
+                :sub="t('settings.tg.account.hint', undefined, 'Name, bio, phone, birthday, avatar')"
+                @click="openPage('account')"
+              />
+              <TGRow
+                icon="mdi-bell-outline"
+                :title="t('settings.notifications_nav', undefined, 'Notifications and Sounds')"
+                :sub="t('settings.tg.notif.hint', undefined, 'Global, per-chat, events, calls, badge')"
+                @click="openPage('notifications')"
+              />
+              <TGRow
+                icon="mdi-shield-lock-outline"
+                :title="t('settings.privacy', undefined, 'Privacy & security')"
+                :sub="t('settings.tg.security.hint', undefined, 'Sessions, blocked users, privacy rules')"
+                @click="openPage('privacy')"
+              />
+              <TGRow
+                icon="mdi-message-outline"
+                :title="t('settings.tg.chat.title', undefined, 'Chat Settings')"
+                :sub="t('settings.tg.chat.hint', undefined, 'Theme, accent color, wallpaper')"
+                @click="openPage('chat')"
+              />
+              <TGRow
+                icon="mdi-folder-outline"
+                :title="t('settings.folders', undefined, 'Folders')"
+                :sub="t('settings.tg.folders.hint', undefined, 'Group your chats')"
+                @click="openPage('folders')"
+              />
+              <TGRow
+                icon="mdi-database-outline"
+                :title="t('settings.tg.advanced.title', undefined, 'Advanced')"
+                :sub="t('settings.tg.advanced.hint', undefined, 'Data, storage, auto-download')"
+                @click="openPage('advanced')"
+              />
+              <TGRow
+                icon="mdi-timer-outline"
+                :title="t('settings.tg.power.nav', undefined, 'Battery and Animations')"
+                :sub="t('settings.tg.power.nav_hint', undefined, 'Power saving')"
+                @click="openPage('power')"
+              />
+              <TGRow
+                icon="mdi-translate"
+                :title="t('common.language', undefined, 'Language')"
+                :value="languageLabel"
+                @click="openPage('language')"
+              />
+            </section>
+
+            <section class="tgCard tgCardPad">
+              <div class="settingsCard__title">{{ t('settings.tg.scale.title', undefined, 'Interface scale') }}</div>
+              <div class="toggleRow">
+                <div>
+                  <div class="toggleRow__title">{{ t('settings.tg.scale.enable', undefined, 'Custom scale') }}</div>
+                  <div class="toggleRow__sub">{{ t('settings.tg.scale.hint', undefined, 'Scales the whole interface from the default 100%.') }}</div>
                 </div>
-              </article>
+                <v-switch :model-value="scaleEnabled" hide-details inset color="primary" @update:model-value="onScaleToggle" />
+              </div>
+              <div class="tgSliderRow">
+                <input
+                  type="range"
+                  class="tgSlider"
+                  min="80"
+                  max="150"
+                  step="5"
+                  :value="scalePercent"
+                  :disabled="!scaleEnabled"
+                  :aria-label="t('settings.tg.scale.title', undefined, 'Interface scale')"
+                  @input="onScalePercent(Number(($event.target as HTMLInputElement).value))"
+                />
+                <span class="tgSliderVal">{{ scalePercent }}%</span>
+              </div>
+            </section>
 
-              <article class="settingsCard">
-                <div class="settingsCard__title">{{ t('settings.privacy') }}</div>
-                <div class="settingsSectionText">{{ t('settings.privacy_hint', undefined, 'Control what other people can see about your profile.') }}</div>
-                <div class="toggleRow">
-                  <div>
-                    <div class="toggleRow__title">{{ t('settings.show_last_seen') }}</div>
-                    <div class="toggleRow__sub">{{ t('settings.show_last_seen_hint', undefined, 'Display your online status and last seen time.') }}</div>
-                  </div>
-                  <v-switch :model-value="showLastSeen" hide-details inset color="primary" @update:model-value="handleShowLastSeenChange" />
-                </div>
-              </article>
-
-              <article class="settingsCard settingsCard--full">
-                <div class="settingsCard__title">{{ t('settings.email_change') }}</div>
-                <div class="settingsSectionText">{{ t('settings.email_change_hint', undefined, 'Verify your current email first, then confirm the new address.') }}</div>
-                <v-alert v-if="emailError" type="error" class="mb-4">{{ emailError }}</v-alert>
-
-                <div class="emailFlow">
-                  <div class="emailStep">
-                    <div class="emailStep__head">
-                      <div class="emailStep__badge">1</div>
-                      <div class="emailStep__title">{{ t('settings.email_change_send_old') }}</div>
-                    </div>
-                    <div class="emailStep__body">
-                      <v-btn class="settingsBtn settingsBtn--soft" variant="outlined" rounded="xl" :loading="emailBusy" @click="handleSendOldCode">
-                        {{ t('settings.email_change_send_old') }}
-                      </v-btn>
-                      <v-text-field v-model="oldCode" class="settingsField" :label="t('settings.email_change_old_code')" variant="outlined" rounded="xl" />
-                      <v-btn class="settingsBtn settingsBtn--primary" color="primary" rounded="xl" :loading="emailBusy" @click="handleVerifyOldCode">
-                        {{ t('settings.email_change_verify_old') }}
-                      </v-btn>
-                    </div>
-                  </div>
-
-                  <div class="emailStep">
-                    <div class="emailStep__head">
-                      <div class="emailStep__badge">2</div>
-                      <div class="emailStep__title">{{ t('settings.email_change_new_email') }}</div>
-                    </div>
-                    <div class="emailStep__body">
-                      <v-text-field v-model="newEmail" class="settingsField" :label="t('settings.email_change_new_email')" variant="outlined" rounded="xl" :disabled="!oldVerified" />
-                      <v-btn class="settingsBtn settingsBtn--soft" variant="outlined" rounded="xl" :disabled="!oldVerified" :loading="emailBusy" @click="handleSendNewCode">
-                        {{ t('settings.email_change_send_new') }}
-                      </v-btn>
-                      <v-text-field v-model="newCode" class="settingsField" :label="t('settings.email_change_new_code')" variant="outlined" rounded="xl" :disabled="!oldVerified" />
-                      <v-btn class="settingsBtn settingsBtn--primary" color="primary" rounded="xl" :disabled="!oldVerified" :loading="emailBusy" @click="handleConfirmNewEmail">
-                        {{ t('settings.email_change_confirm') }}
-                      </v-btn>
-                    </div>
-                  </div>
-                </div>
-              </article>
+            <section class="tgCard">
+              <TGRow
+                icon="mdi-information-outline"
+                :title="t('settings.about_combox', undefined, 'About ComBox')"
+                :value="APP_VERSION"
+                @click="openPage('about')"
+              />
             </section>
           </template>
 
           <template v-else>
-            <section class="editHero">
-              <div class="editAvatarPicker" @click="pickAvatar">
-                <div v-if="avatarDataUrl" class="profileAvatar profileAvatar--edit">
-                  <img :src="avatarDataUrl" alt="" class="profileAvatar__img" />
-                </div>
-                <div v-else class="profileAvatar profileAvatar--fallback profileAvatar--edit">{{ initials }}</div>
-                <div class="editAvatarPicker__overlay">
-                  <v-icon icon="mdi-camera-plus-outline" size="28" />
-                </div>
+            <header class="tgTopbar">
+              <button type="button" class="tgTopbarBtn" :aria-label="t('settings.back', undefined, 'Back')" @click="goBack">
+                <v-icon icon="mdi-arrow-left" size="18" />
+              </button>
+              <div class="tgTopbarTitle">{{ pageTitle }}</div>
+              <button type="button" class="tgTopbarBtn" :aria-label="t('common.close', undefined, 'Close')" @click="close">
+                <v-icon icon="mdi-close" size="18" />
+              </button>
+            </header>
+
+            <MyAccountSettings v-if="page === 'account'" />
+            <NotificationsSettings v-else-if="page === 'notifications'" />
+            <PrivacySecuritySettings v-else-if="page === 'privacy'" ref="privacyRef" />
+            <ChatSettings v-else-if="page === 'chat'" />
+            <template v-else-if="page === 'folders'">
+              <div class="tgPage">
+                <RecommendedFolders @created="foldersKey += 1" />
+                <FoldersSettings :key="foldersKey" />
               </div>
-            </section>
-
-            <section class="settingsGrid settingsGrid--edit">
-              <article class="settingsCard settingsCard--full">
-                <div class="settingsCard__title">{{ t('settings.profile') }}</div>
-                <div class="editFields">
-                  <v-text-field v-model="firstName" class="settingsField" :label="t('settings.first_name')" variant="outlined" rounded="xl" />
-                  <v-text-field v-model="lastName" class="settingsField" :label="t('settings.last_name')" variant="outlined" rounded="xl" />
-                  <v-text-field :model-value="username" class="settingsField" :label="t('settings.username')" variant="outlined" rounded="xl" @update:model-value="handleUsernameInput" />
-                  <v-text-field v-model="birthDate" class="settingsField" :label="t('settings.birth_date')" type="date" variant="outlined" rounded="xl" />
-                </div>
-                <div class="editActions">
-                  <v-btn variant="text" class="settingsBtn" color="error" @click="removeAvatar">{{ t('settings.avatar_remove') }}</v-btn>
-                  <v-btn color="primary" class="settingsBtn settingsBtn--primary" rounded="xl" :loading="saving" @click="handleSaveProfile">{{ t('settings.save_profile') }}</v-btn>
-                </div>
-              </article>
-
-              <article class="settingsCard">
-                <div class="settingsCard__title">{{ t('settings.email') }}</div>
-                <v-text-field v-model="email" class="settingsField" :label="t('settings.email')" variant="outlined" rounded="xl" disabled />
-              </article>
-
-              <article class="settingsCard">
-                <div class="settingsCard__title">{{ t('settings.privacy') }}</div>
-                <div class="toggleRow">
-                  <div>
-                    <div class="toggleRow__title">{{ t('settings.show_last_seen') }}</div>
-                    <div class="toggleRow__sub">{{ t('settings.show_last_seen_hint', undefined, 'Display your online status and last seen time.') }}</div>
-                  </div>
-                  <v-switch :model-value="showLastSeen" hide-details inset color="primary" @update:model-value="handleShowLastSeenChange" />
-                </div>
-              </article>
-            </section>
+            </template>
+            <AdvancedSettings v-else-if="page === 'advanced'" />
+            <PowerSavingSettings v-else-if="page === 'power'" />
+            <LanguageSettings v-else-if="page === 'language'" />
+            <AboutSettings v-else />
           </template>
-        </section>
-      </template>
-    </v-container>
+        </div>
+      </section>
+    </div>
+    <AvatarViewer />
   </PageShell>
 </template>
 
 <style scoped>
-.settingsPage {
+.hub {
+  height: 100dvh;
+  overflow: hidden;
   color: var(--text);
 }
 
-.settingsShell {
-  display: grid;
-  gap: 18px;
-}
-
-.settingsTopbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.settingsTopbar__title {
-  font-size: 2rem;
-  line-height: 1.02;
-  font-weight: 900;
-  letter-spacing: -.04em;
-}
-
-.settingsTopbar__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.settingsIconBtn {
-  width: 40px;
-  height: 40px;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.12);
-  color: var(--text-soft);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-}
-
-.settingsIconBtn:hover {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-}
-
-.profileHero {
-  position: relative;
-  overflow: hidden;
-  padding: 34px 24px 26px;
-  border-radius: var(--radius-lg);
-  background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.22), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(255, 255, 255, 0.2), transparent 26%),
-    linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
-  box-shadow: 0 18px 40px color-mix(in srgb, var(--accent) 26%, transparent);
-  display: grid;
-  justify-items: center;
-  gap: 10px;
-  color: #fff;
-}
-
-.profileHero__ornament {
-  position: absolute;
-  width: 92px;
-  height: 92px;
-  border-radius: 50%;
-  filter: blur(8px);
-  opacity: 0.18;
-  background: rgba(255, 255, 255, 0.9);
-}
-
-.profileHero__ornament--left {
-  left: -14px;
-  top: -18px;
-}
-
-.profileHero__ornament--right {
-  right: -10px;
-  bottom: -14px;
-}
-
-.profileAvatar {
-  width: 108px;
-  height: 108px;
-  border-radius: 50%;
-  overflow: hidden;
-  position: relative;
-  z-index: 1;
-  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.18);
-}
-
-.profileAvatar--edit {
-  width: 116px;
-  height: 116px;
-}
-
-.profileAvatar__img {
-  width: 100%;
+.hubContent {
   height: 100%;
-  object-fit: cover;
-  display: block;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
-.profileAvatar--fallback {
+.hubBody {
+  padding: 22px 26px 40px;
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
   display: grid;
-  place-items: center;
-  background: rgba(255, 255, 255, 0.22);
-  color: #fff;
-  font-size: 2.2rem;
-  font-weight: 800;
-  letter-spacing: -.04em;
-}
-
-.profileHero__name {
-  position: relative;
-  z-index: 1;
-  font-size: 2rem;
-  line-height: 1.02;
-  font-weight: 900;
-  letter-spacing: -.05em;
-  text-align: center;
-}
-
-.profileHero__status {
-  position: relative;
-  z-index: 1;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.18);
-  font-size: .95rem;
-  font-weight: 600;
-}
-
-.settingsGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
+  align-content: start;
 }
 
-.settingsGrid--edit {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.hubBody--narrow {
+  max-width: 560px;
 }
 
-.settingsCard {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
-  padding: 20px;
-}
-
-.settingsCard--full,
-.settingsCard--info {
-  grid-column: 1 / -1;
-}
-
-.settingsCard__title {
-  font-size: 1rem;
-  font-weight: 800;
-  letter-spacing: -.02em;
-  margin-bottom: 14px;
-}
-
-.settingsSectionText {
-  color: var(--text-muted);
-  font-size: .95rem;
-  line-height: 1.45;
-  margin-bottom: 14px;
-  max-width: 58ch;
-}
-
-.infoList {
-  display: grid;
-  gap: 12px;
-}
-
-.infoRow {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  padding: 14px 16px;
-  border-radius: 22px;
-  background: var(--surface-soft);
-}
-
-.infoRow__icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  background: rgba(148, 163, 184, 0.14);
-  color: var(--accent-strong);
-}
-
-.infoRow__value {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--text);
-}
-
-.infoRow__label {
-  margin-top: 2px;
-  font-size: .86rem;
-  color: var(--text-muted);
-}
-
-.toggleRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
-  border-radius: 22px;
-  background: var(--surface-soft);
-}
-
-.toggleRow__title {
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-.toggleRow__sub {
-  margin-top: 2px;
-  color: var(--text-muted);
-  font-size: .88rem;
-  line-height: 1.4;
-}
-
-.emailFlow {
-  display: grid;
-  gap: 16px;
-}
-
-.emailStep {
-  padding: 16px;
-  border-radius: 24px;
-  background: var(--surface-soft);
-}
-
-.emailStep__head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
-}
-
-.emailStep__badge {
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  background: var(--accent);
-  color: #fff;
-  font-size: .85rem;
-  font-weight: 800;
-}
-
-.emailStep__title {
-  font-weight: 700;
-}
-
-.emailStep__body {
-  display: grid;
-  gap: 12px;
-}
-
-.editHero {
-  display: grid;
-  justify-items: center;
-  padding: 10px 0 4px;
-}
-
-.editAvatarPicker {
-  border: 0;
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-  position: relative;
-  width: 116px;
-  height: 116px;
-  border-radius: 50%;
-}
-
-.editAvatarPicker__overlay {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: rgba(15, 23, 42, 0.24);
-  color: #fff;
-}
-
-.editFields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.editActions {
-  margin-top: 10px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-
-.settingsBtn {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 700;
-}
-
-.settingsBtn--primary {
-  box-shadow: none;
-}
-
-.settingsBtn--soft {
-  background: rgba(148, 163, 184, 0.08);
-}
-
-@media (max-width: 900px) {
-  .settingsGrid,
-  .settingsGrid--edit,
-  .editFields {
-    grid-template-columns: 1fr;
-  }
-
-  .profileHero {
-    padding-inline: 18px;
-  }
-
-  .profileHero__name {
-    font-size: 1.7rem;
-  }
-
-  .editActions {
-    flex-direction: column;
-    align-items: stretch;
+@media (max-width: 560px) {
+  .hubBody {
+    padding: 14px 12px 32px;
   }
 }
 </style>

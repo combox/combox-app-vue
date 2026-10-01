@@ -6,6 +6,7 @@ export type LazyLoadTask = {
 type TaskInternal = LazyLoadTask & {
   visible: boolean
   wasSeen: boolean
+  attempts: number
 }
 
 type VisibilityCallback = (visible: boolean, entry: IntersectionObserverEntry) => void
@@ -17,6 +18,8 @@ type VisibilityCallback = (visible: boolean, entry: IntersectionObserverEntry) =
  * - parallel limit + lock (to avoid fighting resize/open animations)
  */
 export class MediaLazyQueue {
+  private static readonly MAX_ATTEMPTS = 3
+
   private readonly tasks = new Map<HTMLElement, TaskInternal>()
   private readonly callbacks = new Map<HTMLElement, Set<VisibilityCallback>>()
   private readonly queue: TaskInternal[] = []
@@ -68,6 +71,7 @@ export class MediaLazyQueue {
       ...task,
       visible: false,
       wasSeen: false,
+      attempts: 0,
     }
     this.tasks.set(task.target, internal)
 
@@ -178,19 +182,52 @@ export class MediaLazyQueue {
       this.inProcess.add(item.target)
       Promise.resolve()
         .then(() => item.load())
-        .catch(() => undefined)
+        .then(
+          () => this.finishTask(item, true),
+          () => this.finishTask(item, false),
+        )
         .finally(() => {
-          this.inProcess.delete(item.target)
-          // Load-once: after success/failure we stop observing this target (unless there are callbacks).
-          // This keeps IO bookkeeping small in long chats.
-          const hasCallbacks = this.callbacks.has(item.target)
-          if (!hasCallbacks) {
-            this.tasks.delete(item.target)
-            this.io?.unobserve(item.target)
-          }
           this.scheduleProcess()
         })
     }
+  }
+
+  private finishTask(item: TaskInternal, ok: boolean) {
+    this.inProcess.delete(item.target)
+    const current = this.tasks.get(item.target)
+    // The task was unobserved while it was loading: nothing left to update.
+    if (!current || current !== item) return
+
+    if (ok) {
+      this.dropTask(item)
+      return
+    }
+
+    item.attempts += 1
+    if (item.attempts >= MediaLazyQueue.MAX_ATTEMPTS) {
+      // Give up, but only after the media has been off-screen once: a permanently
+      // visible element would otherwise spin forever.
+      this.dropTask(item)
+      return
+    }
+
+    // Retry a failed load instead of silently dropping it forever (that was how
+    // a single transient error made media stop appearing until a full reload).
+    const delay = 500 * item.attempts
+    window.setTimeout(() => {
+      if (this.tasks.get(item.target) !== item) return
+      if (item.visible && !this.queue.includes(item) && !this.inProcess.has(item.target)) {
+        this.queue.push(item)
+        this.scheduleProcess()
+      }
+    }, delay)
+  }
+
+  private dropTask(item: TaskInternal) {
+    if (this.callbacks.has(item.target)) return
+    this.tasks.delete(item.target)
+    this.io?.unobserve(item.target)
+    this.removeFromQueue(item.target)
   }
 }
 

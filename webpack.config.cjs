@@ -127,7 +127,11 @@ module.exports = (env, argv) => {
         __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: JSON.stringify(false),
       }),
     ],
-    devtool: isDev ? 'eval-cheap-module-source-map' : false,
+    // Production source maps: fetched by browsers only when devtools are open,
+    // so they add zero load cost but silence the "missing source maps for
+    // large first-party JS" best-practices audit. Emitted next to the chunks
+    // and deployed with dist/.
+    devtool: isDev ? 'eval-cheap-module-source-map' : 'source-map',
     devServer: {
       host: '0.0.0.0',
       port: 4173,

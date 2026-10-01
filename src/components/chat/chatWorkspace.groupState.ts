@@ -184,6 +184,7 @@ export function setupWorkspaceGroupState(input: GroupStateInput) {
       const fallbackPreview = getLastCachedMessageContent(item.id)
       const fallbackCreatedAt = getLastCachedMessageCreatedAt(item.id)
       return {
+        ...item,
         id: item.id,
         title: isGeneral ? 'General' : item.title,
         channel_type: item.channel_type,

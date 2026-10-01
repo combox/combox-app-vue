@@ -58,12 +58,13 @@ function getYouTubeId(src: string): string {
   if (!src) return ''
   try {
     const parsed = new URL(src)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
     const host = parsed.hostname.toLowerCase()
     if (host === 'youtu.be') {
       const id = parsed.pathname.split('/').filter(Boolean)[0] || ''
       if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return id
     }
-    if (host.includes('youtube.com')) {
+    if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
       const byQuery = parsed.searchParams.get('v') || ''
       if (/^[a-zA-Z0-9_-]{11}$/.test(byQuery)) return byQuery
       const parts = parsed.pathname.split('/').filter(Boolean)
@@ -286,7 +287,7 @@ onBeforeUnmount(() => {
 .video-viewer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.82);
+  background: var(--viewer-scrim);
   z-index: 1600;
   padding: 2vh 2vw;
   margin: 0;

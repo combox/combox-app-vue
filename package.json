@@ -1,7 +1,7 @@
 {
   "name": "combox-app-vue",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "webpack serve --mode development --host 0.0.0.0 --port 4173",
@@ -15,7 +15,7 @@
     "@mdi/font": "^7.4.47",
     "combox-api": "file:../combox-api",
     "emojibase-data": "^17.0.0",
-    "hls.js": "^1.6.16",
+    "highlight.js": "^11.12.0",
     "plyr": "^3.8.4",
     "serve": "^14.2.4",
     "vue": "^3.5.22",
@@ -28,8 +28,8 @@
     "@vue/compiler-sfc": "^3.5.22",
     "copy-webpack-plugin": "^14.0.0",
     "css-loader": "^7.1.2",
-    "esbuild": "^0.27.3",
-    "esbuild-loader": "^4.4.2",
+    "esbuild": "^0.28.2",
+    "esbuild-loader": "^4.5.0",
     "eslint": "^9.39.1",
     "eslint-plugin-vue": "^10.5.1",
     "globals": "^16.5.0",
@@ -42,6 +42,6 @@
     "vue-loader": "^17.4.2",
     "webpack": "^5.102.1",
     "webpack-cli": "^6.0.1",
-    "webpack-dev-server": "^5.2.2"
+    "webpack-dev-server": "^6.0.0"
   }
 }

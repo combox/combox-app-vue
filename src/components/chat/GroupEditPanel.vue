@@ -1,10 +1,69 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { searchDirectory, type AuthUser, type ChatInviteLink, type ChatItem, type ChatMemberProfile, type SearchUserResult } from 'combox-api'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import {
+  getChat,
+  getUserByID,
+  listChatEvents,
+  listChats,
+  searchDirectory,
+  updateChat,
+  type AuthUser,
+  type ChatEvent,
+  type ChatInviteLink,
+  type ChatItem,
+  type ChatMemberProfile,
+  type SearchUserResult,
+} from 'combox-api'
 import { normalizeAvatarSrc } from './chatUtils'
+import ComposerEmojiGifPicker from './ComposerEmojiGifPicker.vue'
+import { openAvatarPreview } from '../../utils/avatarViewer'
+import { avatarColorFor } from '../../utils/avatarColor'
 import { useI18n } from '../../i18n/i18n'
+import { useToast } from '../../composables/useToast'
+import { chatKindLabel } from './chatLabels'
+import { formatRelativeTime } from '../../utils/relativeTime'
+import {
+  SLOW_MODE_OPTIONS,
+  eventActionLabel,
+  normalizeSendPermission,
+  runeCount,
+  slowModeLabel,
+  truncateRunes,
+} from './groupSettingsMeta'
 
-type PanelMode = 'main' | 'admins' | 'add_admin' | 'members' | 'removed' | 'links'
+type PanelMode = 'main' | 'admins' | 'add_admin' | 'members' | 'removed' | 'links' | 'slow_mode' | 'discussion' | 'events'
+
+/** Patch body accepted by the SDK `updateChat` (PATCH /chats/{chatID}). */
+type ChatPatch = Parameters<typeof updateChat>[1]
+
+/** Server-side snapshot of every setting edited straight from this panel. */
+type SettingsDraft = {
+  description: string
+  iconEmoji: string
+  commentsEnabled: boolean
+  reactionsEnabled: boolean
+  signMessages: boolean
+  showAuthorsProfiles: boolean
+  autoTranslate: boolean
+  sendPermission: 'all' | 'admins'
+  slowModeSeconds: number
+  discussionChatID: string
+}
+
+function draftFromChat(chat: ChatItem | null | undefined): SettingsDraft {
+  return {
+    description: String(chat?.description ?? ''),
+    iconEmoji: String(chat?.icon_emoji ?? ''),
+    commentsEnabled: Boolean(chat?.comments_enabled ?? true),
+    reactionsEnabled: Boolean(chat?.reactions_enabled ?? true),
+    signMessages: Boolean(chat?.sign_messages ?? false),
+    showAuthorsProfiles: Boolean(chat?.show_authors_profiles ?? false),
+    autoTranslate: Boolean(chat?.auto_translate ?? false),
+    sendPermission: normalizeSendPermission(chat?.send_permission),
+    slowModeSeconds: Number(chat?.slow_mode_seconds || 0),
+    discussionChatID: String(chat?.discussion_chat_id ?? '').trim(),
+  }
+}
 
 const props = defineProps<{
   selectedChat: ChatItem | null
@@ -22,9 +81,12 @@ const emit = defineEmits<{
   removeMember: [userID: string]
   leaveChat: [payload: { onSuccess: () => void; onError: (message: string) => void }]
   createInviteLink: [title?: string]
+  /** Fresh chat returned by a settings PATCH done inside this panel. */
+  chatUpdated: [chat: ChatItem]
 }>()
 
 const { t } = useI18n()
+const toast = useToast()
 const panelMode = ref<PanelMode>('main')
 
 const addQuery = ref('')
@@ -36,6 +98,55 @@ const avatarPreview = ref(normalizeAvatarSrc(props.selectedChat?.avatar_data_url
 const avatarDataUrl = ref<string | null>(null)
 const saveBusy = ref(false)
 const saveError = ref('')
+
+const serverDraft = ref<SettingsDraft>(draftFromChat(props.selectedChat))
+const descriptionDraft = ref(serverDraft.value.description)
+const iconEmojiDraft = ref(serverDraft.value.iconEmoji)
+const commentsEnabledDraft = ref(serverDraft.value.commentsEnabled)
+const reactionsEnabledDraft = ref(serverDraft.value.reactionsEnabled)
+const signMessagesDraft = ref(serverDraft.value.signMessages)
+const showAuthorsDraft = ref(serverDraft.value.showAuthorsProfiles)
+const autoTranslateDraft = ref(serverDraft.value.autoTranslate)
+const sendPermissionDraft = ref(serverDraft.value.sendPermission)
+const slowModeDraft = ref(serverDraft.value.slowModeSeconds)
+const discussionChatIDDraft = ref(serverDraft.value.discussionChatID)
+/** Field name -> in-flight PATCH, used to keep rapid toggles from racing each other. */
+const pendingSettings = ref<Record<string, boolean>>({})
+
+const descriptionTextareaRef = ref<HTMLTextAreaElement | null>(null)
+const descriptionWrapRef = ref<HTMLElement | null>(null)
+const descriptionPickerOpen = ref(false)
+
+const discussionChats = ref<ChatItem[]>([])
+const discussionTitles = ref<Record<string, string>>({})
+const discussionLoading = ref(false)
+const discussionError = ref('')
+const discussionLoadedFor = ref('')
+
+const eventsRaw = ref<ChatEvent[]>([])
+const actorNames = ref<Record<string, string>>({})
+const eventsLoading = ref(false)
+const eventsError = ref('')
+
+const descriptionDirty = computed(() => descriptionDraft.value !== serverDraft.value.description)
+const iconEmojiDirty = computed(() => iconEmojiDraft.value !== serverDraft.value.iconEmoji)
+
+const chatKindText = computed(() => chatKindLabel(t, props.selectedChat))
+const isPublicChat = computed(() => Boolean(props.selectedChat?.is_public))
+/** Canonical public entry link: the hash form `readPublicSlugFromHash()` opens. */
+const publicLink = computed(() => {
+  const slug = (props.selectedChat?.public_slug || '').trim().replace(/^@+/, '')
+  if (!slug || typeof window === 'undefined') return ''
+  return `${window.location.origin}${window.location.pathname}${window.location.search}#@${encodeURIComponent(slug)}`
+})
+/** The backend only accepts `send_permission` on chats of kind `channel`. */
+const sendPermissionSupported = computed(() => {
+  const kind = (props.selectedChat?.kind || '').trim().toLowerCase()
+  return kind === 'channel' || kind === 'standalone_channel'
+})
+/** Broadcast-only toggles (`sign_messages`, `show_authors_profiles`) need a broadcast channel. */
+const isStandaloneChannel = computed(() => (props.selectedChat?.kind || '').trim() === 'standalone_channel')
+const iconGraphemeCount = computed(() => graphemeCount(iconEmojiDraft.value || ''))
 
 const inviteLinks = computed(() => props.inviteLinks || [])
 const removedChatMembers = computed(() => props.removedChatMembers || [])
@@ -89,14 +200,69 @@ const hasUnsavedChanges = computed(() => {
   return title.value.trim() !== originalTitle || avatarDataUrl.value !== null
 })
 
+/**
+ * Keeps drafts in sync with the parent chat. `selectedChat` is rebuilt on every
+ * chat list reload (they happen on incoming messages), so untouched fields follow
+ * the server while fields the user is editing keep their local value.
+ */
+function adoptIfClean(target: { value: boolean | number | string }, previousValue: boolean | number | string, nextValue: boolean | number | string): void {
+  if (target.value === previousValue) target.value = nextValue
+}
+
+function applyServerDraft(fresh: SettingsDraft): void {
+  const previous = serverDraft.value
+  adoptIfClean(descriptionDraft, previous.description, fresh.description)
+  adoptIfClean(iconEmojiDraft, previous.iconEmoji, fresh.iconEmoji)
+  adoptIfClean(commentsEnabledDraft, previous.commentsEnabled, fresh.commentsEnabled)
+  adoptIfClean(reactionsEnabledDraft, previous.reactionsEnabled, fresh.reactionsEnabled)
+  adoptIfClean(signMessagesDraft, previous.signMessages, fresh.signMessages)
+  adoptIfClean(showAuthorsDraft, previous.showAuthorsProfiles, fresh.showAuthorsProfiles)
+  adoptIfClean(autoTranslateDraft, previous.autoTranslate, fresh.autoTranslate)
+  adoptIfClean(sendPermissionDraft, previous.sendPermission, fresh.sendPermission)
+  adoptIfClean(slowModeDraft, previous.slowModeSeconds, fresh.slowModeSeconds)
+  adoptIfClean(discussionChatIDDraft, previous.discussionChatID, fresh.discussionChatID)
+  serverDraft.value = fresh
+}
+
+function resetDrafts(fresh: SettingsDraft): void {
+  descriptionDraft.value = fresh.description
+  iconEmojiDraft.value = fresh.iconEmoji
+  commentsEnabledDraft.value = fresh.commentsEnabled
+  reactionsEnabledDraft.value = fresh.reactionsEnabled
+  signMessagesDraft.value = fresh.signMessages
+  showAuthorsDraft.value = fresh.showAuthorsProfiles
+  autoTranslateDraft.value = fresh.autoTranslate
+  sendPermissionDraft.value = fresh.sendPermission
+  slowModeDraft.value = fresh.slowModeSeconds
+  discussionChatIDDraft.value = fresh.discussionChatID
+  serverDraft.value = fresh
+  pendingSettings.value = {}
+}
+
 watch(
   () => props.selectedChat,
-  (chat) => {
-    title.value = (chat?.title || '').trim()
-    avatarPreview.value = normalizeAvatarSrc(chat?.avatar_data_url || '')
-    avatarDataUrl.value = null
-    saveError.value = ''
-    panelMode.value = 'main'
+  (chat, previousChat) => {
+    closeDescriptionPicker()
+    const next = draftFromChat(chat)
+    const chatSwitched = (chat?.id || '') !== (previousChat?.id || '')
+
+    if (chatSwitched) {
+      title.value = (chat?.title || '').trim()
+      avatarPreview.value = normalizeAvatarSrc(chat?.avatar_data_url || '')
+      avatarDataUrl.value = null
+      saveError.value = ''
+      panelMode.value = 'main'
+      resetDiscussionState()
+      resetEventsState()
+      resetDrafts(next)
+    } else {
+      if (title.value.trim() === (previousChat?.title || '').trim()) title.value = (chat?.title || '').trim()
+      const previousAvatar = normalizeAvatarSrc(previousChat?.avatar_data_url || '')
+      if (avatarDataUrl.value === null && avatarPreview.value === previousAvatar) {
+        avatarPreview.value = normalizeAvatarSrc(chat?.avatar_data_url || '')
+      }
+      applyServerDraft(next)
+    }
   },
   { immediate: true },
 )
@@ -123,6 +289,10 @@ watch(addQuery, (query) => {
 })
 
 function goBack() {
+  if (descriptionPickerOpen.value) {
+    closeDescriptionPicker()
+    return
+  }
   if (panelMode.value === 'add_admin') {
     panelMode.value = 'admins'
     return
@@ -152,27 +322,23 @@ function restoreRemoved(userID: string) {
   emit('updateMemberRole', { userID, role: 'member' })
 }
 
-function pickAvatar() {
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = 'image/*'
-  input.onchange = () => {
-    const file = input.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : ''
-      if (!result) return
-      avatarDataUrl.value = result
-      avatarPreview.value = result
-      saveError.value = ''
-    }
-    reader.onerror = () => {
-      saveError.value = t('chat.failed_read_avatar')
-    }
-    reader.readAsDataURL(file)
+function onAvatarPick(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const result = typeof reader.result === 'string' ? reader.result : ''
+    if (!result) return
+    avatarDataUrl.value = result
+    avatarPreview.value = result
+    saveError.value = ''
   }
-  input.click()
+  reader.onerror = () => {
+    saveError.value = t('chat.failed_read_avatar')
+  }
+  reader.readAsDataURL(file)
 }
 
 function saveProfile() {
@@ -196,6 +362,17 @@ function saveProfile() {
       saveError.value = message
     },
   })
+}
+
+function clearAvatar() {
+  avatarDataUrl.value = ''
+  avatarPreview.value = ''
+}
+
+function previewAvatar() {
+  if (!avatarPreview.value) return
+  const chatID = (props.selectedChat?.id || '').trim()
+  openAvatarPreview(avatarPreview.value, props.selectedChat?.title || '', chatID ? { ownerId: chatID, ownerKind: 'chat' } : undefined)
 }
 
 function leaveCurrentChat() {
@@ -263,6 +440,399 @@ function copyText(value: string) {
     textarea.remove()
   })()
 }
+
+// ---------------------------------------------------------------------------
+// Group settings saved straight through the SDK (optimistic value + rollback)
+// ---------------------------------------------------------------------------
+
+async function patchSettings(key: string, patch: ChatPatch, rollback: () => void): Promise<boolean> {
+  const chatID = (props.selectedChat?.id || '').trim()
+  if (!chatID) {
+    rollback()
+    return false
+  }
+  pendingSettings.value = { ...pendingSettings.value, [key]: true }
+  const sameChatStill = () => (props.selectedChat?.id || '').trim() === chatID
+  try {
+    const payload = await updateChat(chatID, patch)
+    if (sameChatStill()) {
+      applyServerDraft(draftFromChat(payload.chat))
+      emit('chatUpdated', payload.chat)
+    }
+    return true
+  } catch (error) {
+    if (sameChatStill()) rollback()
+    toast.error(error instanceof Error ? error.message : t('chat.groupset_save_failed', undefined, 'Could not save the setting'))
+    return false
+  } finally {
+    const nextPending = { ...pendingSettings.value }
+    delete nextPending[key]
+    pendingSettings.value = nextPending
+  }
+}
+
+function saveDescription() {
+  if (pendingSettings.value['description']) return
+  const value = truncateRunes(descriptionDraft.value, 255)
+  const previous = descriptionDraft.value
+  descriptionDraft.value = value
+  if (value === serverDraft.value.description) return
+  void patchSettings('description', { description: value }, () => {
+    descriptionDraft.value = previous
+  })
+}
+
+function toggleDescriptionPicker() {
+  descriptionPickerOpen.value = !descriptionPickerOpen.value
+}
+
+function closeDescriptionPicker() {
+  descriptionPickerOpen.value = false
+}
+
+function onDocumentPointerDown(event: PointerEvent) {
+  const target = event.target as Node | null
+  if (descriptionPickerOpen.value && target && !descriptionWrapRef.value?.contains(target)) {
+    descriptionPickerOpen.value = false
+  }
+}
+
+function onDescriptionEmojiPick(emoji: string) {
+  if (!emoji) return
+  const element = descriptionTextareaRef.value
+  const current = descriptionDraft.value || ''
+  let start = current.length
+  let end = current.length
+  try {
+    if (element && typeof element.selectionStart === 'number' && typeof element.selectionEnd === 'number') {
+      start = Math.max(0, Math.min(element.selectionStart, current.length))
+      end = Math.max(start, Math.min(element.selectionEnd, current.length))
+    }
+  } catch {
+    // Selection is unavailable; append at the end.
+  }
+  const raw = `${current.slice(0, start)}${emoji}${current.slice(end)}`
+  const truncated = truncateRunes(raw, 255)
+  descriptionDraft.value = truncated
+  const caret = Array.from(raw).length <= 255 ? Math.min(start + emoji.length, truncated.length) : truncated.length
+  void nextTick(() => {
+    try {
+      element?.focus()
+      element?.setSelectionRange(caret, caret)
+    } catch {
+      // Some input modes do not expose a selection; the caret stays at the end.
+    }
+  })
+}
+
+watch(descriptionPickerOpen, (open) => {
+  if (open) document.addEventListener('pointerdown', onDocumentPointerDown)
+  else document.removeEventListener('pointerdown', onDocumentPointerDown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
+})
+
+function graphemeSegments(value: string): string[] {
+  const text = value || ''
+  try {
+    const intlWithSegmenter = Intl as unknown as {
+      Segmenter?: new (locales?: string | string[], options?: { granularity?: string }) => {
+        segment(input: string): Iterable<{ segment: string }>
+      }
+    }
+    const SegmenterCtor = intlWithSegmenter.Segmenter
+    if (typeof SegmenterCtor === 'function') {
+      const segmenter = new SegmenterCtor(undefined, { granularity: 'grapheme' })
+      return Array.from(segmenter.segment(text), (part) => part.segment)
+    }
+  } catch {
+    // Intl.Segmenter is unavailable; fall back to code points below.
+  }
+  return Array.from(text)
+}
+
+function graphemeCount(value: string): number {
+  return graphemeSegments(value).length
+}
+
+function saveIconEmoji() {
+  if (pendingSettings.value['icon_emoji']) return
+  const next = (iconEmojiDraft.value || '').trim()
+  const previous = iconEmojiDraft.value
+  const serverValue = serverDraft.value.iconEmoji || ''
+  if (!next) {
+    iconEmojiDraft.value = ''
+    if (serverValue === '' || serverValue.trim() === '') {
+      iconEmojiDraft.value = serverValue
+      return
+    }
+    void patchSettings('icon_emoji', { icon_emoji: '' }, () => {
+      iconEmojiDraft.value = previous
+    })
+    return
+  }
+  if (graphemeCount(next) !== 1) {
+    iconEmojiDraft.value = serverValue
+    toast.error(t('chat.chanset_emoji_too_long', undefined, 'Icon emoji must be a single emoji'))
+    return
+  }
+  iconEmojiDraft.value = next
+  if (next === serverValue) return
+  void patchSettings('icon_emoji', { icon_emoji: next }, () => {
+    iconEmojiDraft.value = previous
+  })
+}
+
+function clearIconEmoji() {
+  if (pendingSettings.value['icon_emoji']) return
+  const previous = iconEmojiDraft.value
+  if (!previous) return
+  iconEmojiDraft.value = ''
+  void patchSettings('icon_emoji', { icon_emoji: '' }, () => {
+    iconEmojiDraft.value = previous
+  })
+}
+
+function onIconEmojiInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  iconEmojiDraft.value = input.value
+}
+
+function setSendPermission(next: 'all' | 'admins') {
+  if (sendPermissionDraft.value === next || pendingSettings.value['send_permission']) return
+  const previous = sendPermissionDraft.value
+  sendPermissionDraft.value = next
+  void patchSettings('send_permission', { send_permission: next }, () => {
+    sendPermissionDraft.value = previous
+  })
+}
+
+function setCommentsEnabled(next: boolean) {
+  if (commentsEnabledDraft.value === next || pendingSettings.value['comments_enabled']) return
+  const previous = commentsEnabledDraft.value
+  commentsEnabledDraft.value = next
+  void patchSettings('comments_enabled', { comments_enabled: next }, () => {
+    commentsEnabledDraft.value = previous
+  })
+}
+
+function setReactionsEnabled(next: boolean) {
+  if (reactionsEnabledDraft.value === next || pendingSettings.value['reactions_enabled']) return
+  const previous = reactionsEnabledDraft.value
+  reactionsEnabledDraft.value = next
+  void patchSettings('reactions_enabled', { reactions_enabled: next }, () => {
+    reactionsEnabledDraft.value = previous
+  })
+}
+
+function setSignMessages(next: boolean) {
+  if (signMessagesDraft.value === next || pendingSettings.value['sign_messages']) return
+  const previous = signMessagesDraft.value
+  signMessagesDraft.value = next
+  void patchSettings('sign_messages', { sign_messages: next }, () => {
+    signMessagesDraft.value = previous
+  })
+}
+
+function setShowAuthors(next: boolean) {
+  if (showAuthorsDraft.value === next || pendingSettings.value['show_authors_profiles']) return
+  const previous = showAuthorsDraft.value
+  showAuthorsDraft.value = next
+  void patchSettings('show_authors_profiles', { show_authors_profiles: next }, () => {
+    showAuthorsDraft.value = previous
+  })
+}
+
+function setAutoTranslate(next: boolean) {
+  if (autoTranslateDraft.value === next || pendingSettings.value['auto_translate']) return
+  const previous = autoTranslateDraft.value
+  autoTranslateDraft.value = next
+  void patchSettings('auto_translate', { auto_translate: next }, () => {
+    autoTranslateDraft.value = previous
+  })
+}
+
+function openSlowMode() {
+  panelMode.value = 'slow_mode'
+}
+
+function setSlowMode(seconds: number) {
+  const next = Number(seconds) || 0
+  if (slowModeDraft.value === next || pendingSettings.value['slow_mode_seconds']) return
+  const previous = slowModeDraft.value
+  slowModeDraft.value = next
+  void patchSettings('slow_mode_seconds', { slow_mode_seconds: next }, () => {
+    slowModeDraft.value = previous
+  })
+}
+
+function copyPublicLink() {
+  const link = publicLink.value
+  if (!link) return
+  copyText(link)
+  toast.success(t('chat.groupset_link_copied', undefined, 'Link copied'))
+}
+
+// ---------------------------------------------------------------------------
+// Discussion (linked group)
+// ---------------------------------------------------------------------------
+
+function resetDiscussionState() {
+  discussionChats.value = []
+  discussionLoading.value = false
+  discussionError.value = ''
+  discussionLoadedFor.value = ''
+}
+
+const discussionCurrentTitle = computed(() => {
+  const chatID = discussionChatIDDraft.value
+  if (!chatID) return ''
+  const listed = discussionChats.value.find((item) => (item.id || '').trim() === chatID)
+  if (listed) return (listed.title || '').trim()
+  return (discussionTitles.value[chatID] || '').trim()
+})
+
+/** Main-screen / sub-screen value: the linked title, "Linked" while unknown, or nothing. */
+const discussionRowMeta = computed(() => {
+  if (!discussionChatIDDraft.value) return t('chat.groupset_no_discussion', undefined, 'No discussion')
+  return discussionCurrentTitle.value || t('chat.groupset_discussion_linked', undefined, 'Linked')
+})
+
+async function loadDiscussionChats() {
+  if (discussionLoading.value) return
+  const chatID = (props.selectedChat?.id || '').trim()
+  if (!chatID) return
+  discussionLoadedFor.value = chatID
+  discussionLoading.value = true
+  discussionError.value = ''
+  try {
+    const chats = await listChats()
+    const titles: Record<string, string> = {}
+    for (const item of chats) {
+      const id = (item.id || '').trim()
+      if (id) titles[id] = (item.title || '').trim()
+    }
+    discussionTitles.value = { ...discussionTitles.value, ...titles }
+    discussionChats.value = chats.filter((item) => {
+      const id = (item.id || '').trim()
+      if (!id || id === chatID) return false
+      return (item.kind || '').trim().toLowerCase() === 'group'
+    })
+    const currentID = discussionChatIDDraft.value
+    if (currentID && !titles[currentID]) {
+      try {
+        const linked = await getChat(currentID)
+        discussionTitles.value = { ...discussionTitles.value, [currentID]: (linked.title || '').trim() }
+      } catch {
+        // The linked chat has no resolvable title; the row shows "Linked".
+      }
+    }
+  } catch (error) {
+    discussionError.value = error instanceof Error ? error.message : t('chat.groupset_load_failed', undefined, 'Could not load chats')
+  } finally {
+    discussionLoading.value = false
+  }
+}
+
+function openDiscussion() {
+  panelMode.value = 'discussion'
+  void loadDiscussionChats()
+}
+
+/** Resolves the linked chat title for the main-screen row, at most once per selected chat. */
+watch(
+  () => [panelMode.value, (props.selectedChat?.id || '').trim(), discussionChatIDDraft.value] as const,
+  ([mode, chatID, linkedID]) => {
+    if (mode !== 'main' || !chatID || !linkedID) return
+    if (discussionLoadedFor.value === chatID) return
+    void loadDiscussionChats()
+  },
+  { immediate: true },
+)
+
+/** `discussion_chat_id: ''` clears the link (see service_chat_profile.go). */
+function setDiscussionChat(nextChatID: string) {
+  const next = (nextChatID || '').trim()
+  if (discussionChatIDDraft.value === next || pendingSettings.value['discussion_chat_id']) return
+  const previous = discussionChatIDDraft.value
+  discussionChatIDDraft.value = next
+  void patchSettings('discussion_chat_id', { discussion_chat_id: next }, () => {
+    discussionChatIDDraft.value = previous
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Recent actions
+// ---------------------------------------------------------------------------
+
+function resetEventsState() {
+  eventsRaw.value = []
+  eventsLoading.value = false
+  eventsError.value = ''
+}
+
+function eventActorLabel(event: ChatEvent): string {
+  const actorID = (event.actor_user_id || '').trim()
+  if (!actorID) return t('chat.groupset_evt_system', undefined, 'System')
+  return actorNames.value[actorID] || t('chat.groupset_unknown_user', undefined, 'Unknown user')
+}
+
+const eventRows = computed(() =>
+  eventsRaw.value.map((event) => ({
+    id: event.id,
+    action: eventActionLabel(t, event.event_type),
+    actor: eventActorLabel(event),
+    payload: (event.payload || '').trim(),
+    time: formatRelativeTime(event.created_at),
+  })),
+)
+
+async function resolveEventActors(items: ChatEvent[]): Promise<void> {
+  const actorIDs = new Set<string>()
+  for (const event of items) {
+    const actorID = (event.actor_user_id || '').trim()
+    if (actorID) actorIDs.add(actorID)
+  }
+  const missing = Array.from(actorIDs).filter((actorID) => !(actorID in actorNames.value))
+  if (missing.length === 0) return
+  await Promise.all(
+    missing.map(async (actorID) => {
+      let name = ''
+      try {
+        const user = await getUserByID(actorID)
+        name = `${(user.first_name || '').trim()} ${(user.last_name || '').trim()}`.trim() || (user.username || '').trim() || actorID
+      } catch {
+        name = ''
+      }
+      actorNames.value = { ...actorNames.value, [actorID]: name }
+    }),
+  )
+}
+
+async function loadEvents() {
+  if (eventsLoading.value) return
+  const chatID = (props.selectedChat?.id || '').trim()
+  if (!chatID) return
+  eventsLoading.value = true
+  eventsError.value = ''
+  try {
+    const items = await listChatEvents(chatID, { limit: 50 })
+    eventsRaw.value = items
+    await resolveEventActors(items)
+  } catch (error) {
+    eventsRaw.value = []
+    eventsError.value = error instanceof Error ? error.message : t('chat.groupset_load_failed', undefined, 'Could not load chats')
+  } finally {
+    eventsLoading.value = false
+  }
+}
+
+function openEvents() {
+  panelMode.value = 'events'
+  void loadEvents()
+}
 </script>
 
 <template>
@@ -278,6 +848,9 @@ function copyText(value: string) {
           : panelMode === 'add_admin' ? t('chat.add_admin', undefined, 'Add Admin')
           : panelMode === 'members' ? t('chat.members', undefined, 'Members')
           : panelMode === 'removed' ? t('chat.removed_users', undefined, 'Blocked users')
+          : panelMode === 'slow_mode' ? t('chat.groupset_slow_mode', undefined, 'Slow mode')
+          : panelMode === 'discussion' ? t('chat.groupset_discussion', undefined, 'Linked group')
+          : panelMode === 'events' ? t('chat.recent_actions', undefined, 'Recent actions')
           : t('chat.invite_links', undefined, 'Invite links')
         }}
       </div>
@@ -286,15 +859,27 @@ function copyText(value: string) {
     <div class="gpScroll">
       <template v-if="panelMode === 'main'">
         <section class="gpHero">
-          <button type="button" class="gpAvatarButton" @click="pickAvatar">
+          <label class="gpAvatarButton">
+            <input type="file" accept="image/*" class="avatarFileInput" @change="onAvatarPick" />
             <div class="gpAvatarWrap">
               <img v-if="avatarPreview" :src="avatarPreview" alt="" class="gpAvatar" />
-              <div v-else class="gpAvatarFallback">{{ (selectedChat?.title || 'G').slice(0, 1).toUpperCase() }}</div>
+              <div v-else-if="iconEmojiDraft" class="gpAvatarFallback gpAvatarEmoji">{{ iconEmojiDraft }}</div>
+              <div v-else class="gpAvatarFallback" :style="{ background: avatarColorFor(selectedChat?.id || selectedChat?.title || 'G') }">{{ (selectedChat?.title || 'G').slice(0, 1).toUpperCase() }}</div>
             </div>
             <div class="gpAvatarOverlay">
               <v-icon icon="mdi-camera-plus-outline" size="30" />
             </div>
-          </button>
+          </label>
+          <div v-if="avatarPreview" class="gpAvatarActions">
+            <button type="button" class="gpAvatarAction" @click="previewAvatar">
+              <v-icon icon="mdi-magnify-plus-outline" size="16" />
+              {{ t('chat.preview_avatar', undefined, 'Preview') }}
+            </button>
+            <button type="button" class="gpAvatarAction gpAvatarAction--danger" @click="clearAvatar">
+              <v-icon icon="mdi-close-circle-outline" size="16" />
+              {{ t('chat.clear_avatar', undefined, 'Remove') }}
+            </button>
+          </div>
         </section>
 
         <section class="gpSection">
@@ -305,6 +890,225 @@ function copyText(value: string) {
           <div v-if="saveError" class="gpError">{{ saveError }}</div>
           <button type="button" class="gpSaveBtn" :disabled="saveBusy || !hasUnsavedChanges" @click="saveProfile">
             {{ saveBusy ? t('chat.saving', undefined, 'Saving...') : t('chat.save', undefined, 'Save') }}
+          </button>
+        </section>
+
+        <section class="gpSection">
+          <div class="gpField">
+            <span class="gpFieldLabel">{{ t('chat.groupset_icon_emoji', undefined, 'Chat icon') }}</span>
+            <div class="gpEmojiRow">
+              <span class="gpEmojiPreview" aria-hidden="true">
+                <template v-if="iconEmojiDraft">{{ iconEmojiDraft }}</template>
+                <v-icon v-else icon="mdi-emoticon-outline" size="20" />
+              </span>
+              <input
+                class="gpInput gpEmojiInput"
+                :value="iconEmojiDraft"
+                :disabled="pendingSettings['icon_emoji']"
+                :placeholder="t('chat.groupset_icon_placeholder', undefined, 'Emoji')"
+                @input="onIconEmojiInput"
+              />
+              <button
+                type="button"
+                class="gpCircleBtn"
+                :disabled="!iconEmojiDraft || pendingSettings['icon_emoji']"
+                :aria-label="t('chat.groupset_clear_icon', undefined, 'Clear icon')"
+                @click="clearIconEmoji"
+              >
+                <v-icon icon="mdi-close" size="16" />
+              </button>
+            </div>
+            <div class="gpFieldFoot">
+              <span class="gpHint">{{ t('chat.groupset_icon_hint', undefined, 'Shown instead of the avatar letter when no photo is set.') }}</span>
+              <span class="gpCounter">{{ iconGraphemeCount }}/1</span>
+            </div>
+          </div>
+          <button type="button" class="gpSaveBtn" :disabled="pendingSettings['icon_emoji'] || !iconEmojiDirty" @click="saveIconEmoji">
+            {{ pendingSettings['icon_emoji'] ? t('chat.saving', undefined, 'Saving...') : t('chat.save', undefined, 'Save') }}
+          </button>
+        </section>
+
+        <section class="gpSection">
+          <div class="gpField">
+            <span class="gpFieldLabel">{{ t('chat.groupset_description', undefined, 'Description') }}</span>
+            <div ref="descriptionWrapRef" class="gpTextareaWrap">
+              <textarea
+                ref="descriptionTextareaRef"
+                v-model="descriptionDraft"
+                class="gpInput gpTextarea gpTextareaWithEmoji"
+                rows="3"
+                :maxlength="255"
+                :disabled="pendingSettings['description']"
+                :placeholder="t('chat.groupset_description_placeholder', undefined, 'About this group')"
+                @blur="saveDescription"
+              ></textarea>
+              <button
+                type="button"
+                class="gpEmojiBtn"
+                :class="{ gpEmojiBtnOn: descriptionPickerOpen }"
+                :disabled="pendingSettings['description']"
+                :aria-expanded="descriptionPickerOpen ? 'true' : 'false'"
+                :aria-label="t('poll.insert_emoji', undefined, 'Insert emoji')"
+                :title="t('poll.insert_emoji', undefined, 'Insert emoji')"
+                @click.stop="toggleDescriptionPicker"
+              >
+                <v-icon icon="mdi-emoticon-happy-outline" size="18" />
+              </button>
+              <div v-if="descriptionPickerOpen" class="gpEmojiPopover" @click.stop>
+                <ComposerEmojiGifPicker :open="descriptionPickerOpen" @select="onDescriptionEmojiPick" />
+              </div>
+            </div>
+            <span class="gpCounter">{{ runeCount(descriptionDraft) }}/255</span>
+          </div>
+          <button type="button" class="gpSaveBtn" :disabled="pendingSettings['description'] || !descriptionDirty" @click="saveDescription">
+            {{ pendingSettings['description'] ? t('chat.saving', undefined, 'Saving...') : t('chat.save', undefined, 'Save') }}
+          </button>
+        </section>
+
+        <section class="gpSection">
+          <div class="gpFieldLabel">{{ t('chat.groupset_chat_info', undefined, 'Chat info') }}</div>
+          <div class="gpInfoList">
+            <div class="gpInfoRow">
+              <span class="gpInfoKey">{{ t('chat.groupset_type', undefined, 'Type') }}</span>
+              <span class="gpInfoValue">{{ chatKindText }}</span>
+            </div>
+            <div class="gpInfoRow">
+              <span class="gpInfoKey">{{ t('chat.groupset_visibility', undefined, 'Visibility') }}</span>
+              <span class="gpInfoValue">{{ isPublicChat ? t('chat.public', undefined, 'Public') : t('chat.private', undefined, 'Private') }}</span>
+            </div>
+          </div>
+          <div class="gpField">
+            <span class="gpFieldLabel">{{ t('chat.public_link', undefined, 'Public link') }}</span>
+            <div class="gpInput gpInputReadOnly">{{ publicLink || t('chat.private_channel_no_link', undefined, 'No public link') }}</div>
+          </div>
+          <div class="gpInlineActions">
+            <button type="button" class="gpSaveBtn" :disabled="!publicLink" @click="copyPublicLink">{{ t('chat.copy_link', undefined, 'Copy link') }}</button>
+          </div>
+        </section>
+
+        <section class="gpSection">
+          <div v-if="sendPermissionSupported" class="gpField">
+            <span class="gpFieldLabel">{{ t('chat.who_can_send', undefined, 'Who can send messages') }}</span>
+            <div class="gpChoiceRow">
+              <button type="button" class="gpChoicePill" :class="{ active: sendPermissionDraft === 'all' }" @click="setSendPermission('all')">
+                {{ t('chat.groupset_everyone', undefined, 'Everyone') }}
+              </button>
+              <button type="button" class="gpChoicePill" :class="{ active: sendPermissionDraft === 'admins' }" @click="setSendPermission('admins')">
+                {{ t('chat.send_permission_admins', undefined, 'Only admins') }}
+              </button>
+            </div>
+          </div>
+          <div class="gpSettingLine">
+            <div class="gpSettingText">
+              <div class="gpFieldLabel">{{ t('chat.groupset_who_can_comment', undefined, 'Who can comment') }}</div>
+              <div class="gpRowMeta">{{ commentsEnabledDraft ? t('chat.groupset_everyone', undefined, 'Everyone') : t('chat.groupset_no_one', undefined, 'No one') }}</div>
+            </div>
+            <button
+              type="button"
+              class="gpToggle"
+              :class="{ on: commentsEnabledDraft }"
+              role="switch"
+              :aria-checked="commentsEnabledDraft ? 'true' : 'false'"
+              :aria-label="t('chat.groupset_who_can_comment', undefined, 'Who can comment')"
+              @click="setCommentsEnabled(!commentsEnabledDraft)"
+            >
+              <span class="gpToggleKnob" />
+            </button>
+          </div>
+        </section>
+
+        <section class="gpSection gpRows">
+          <button type="button" class="gpRow" @click="openSlowMode">
+            <div class="gpRowIcon"><v-icon icon="mdi-timer-sand" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ t('chat.groupset_slow_mode', undefined, 'Slow mode') }}</div>
+              <div class="gpRowMeta">{{ slowModeLabel(t, slowModeDraft) }}</div>
+            </div>
+            <v-icon icon="mdi-chevron-right" size="18" class="gpChevron" />
+          </button>
+          <div class="gpRow gpRowStatic">
+            <div class="gpRowIcon"><v-icon icon="mdi-heart-outline" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ t('chat.reactions', undefined, 'Reactions') }}</div>
+            </div>
+            <button
+              type="button"
+              class="gpToggle"
+              :class="{ on: reactionsEnabledDraft }"
+              role="switch"
+              :aria-checked="reactionsEnabledDraft ? 'true' : 'false'"
+              :aria-label="t('chat.reactions', undefined, 'Reactions')"
+              @click="setReactionsEnabled(!reactionsEnabledDraft)"
+            >
+              <span class="gpToggleKnob" />
+            </button>
+          </div>
+          <div v-if="isStandaloneChannel" class="gpRow gpRowStatic">
+            <div class="gpRowIcon"><v-icon icon="mdi-draw-pen" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ t('chat.groupset_sign_messages', undefined, 'Sign messages') }}</div>
+            </div>
+            <button
+              type="button"
+              class="gpToggle"
+              :class="{ on: signMessagesDraft }"
+              role="switch"
+              :aria-checked="signMessagesDraft ? 'true' : 'false'"
+              :aria-label="t('chat.groupset_sign_messages', undefined, 'Sign messages')"
+              @click="setSignMessages(!signMessagesDraft)"
+            >
+              <span class="gpToggleKnob" />
+            </button>
+          </div>
+          <div v-if="isStandaloneChannel" class="gpRow gpRowStatic">
+            <div class="gpRowIcon"><v-icon icon="mdi-account-circle-outline" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ t('chat.groupset_show_authors', undefined, 'Show message author') }}</div>
+            </div>
+            <button
+              type="button"
+              class="gpToggle"
+              :class="{ on: showAuthorsDraft }"
+              role="switch"
+              :aria-checked="showAuthorsDraft ? 'true' : 'false'"
+              :aria-label="t('chat.groupset_show_authors', undefined, 'Show message author')"
+              @click="setShowAuthors(!showAuthorsDraft)"
+            >
+              <span class="gpToggleKnob" />
+            </button>
+          </div>
+          <div class="gpRow gpRowStatic">
+            <div class="gpRowIcon"><v-icon icon="mdi-translate" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ t('chat.groupset_auto_translate', undefined, 'Auto translate') }}</div>
+            </div>
+            <button
+              type="button"
+              class="gpToggle"
+              :class="{ on: autoTranslateDraft }"
+              role="switch"
+              :aria-checked="autoTranslateDraft ? 'true' : 'false'"
+              :aria-label="t('chat.groupset_auto_translate', undefined, 'Auto translate')"
+              @click="setAutoTranslate(!autoTranslateDraft)"
+            >
+              <span class="gpToggleKnob" />
+            </button>
+          </div>
+          <button type="button" class="gpRow" @click="openDiscussion">
+            <div class="gpRowIcon"><v-icon icon="mdi-forum-outline" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ t('chat.groupset_discussion', undefined, 'Linked group') }}</div>
+              <div class="gpRowMeta">{{ discussionRowMeta }}</div>
+            </div>
+            <v-icon icon="mdi-chevron-right" size="18" class="gpChevron" />
+          </button>
+          <button type="button" class="gpRow" @click="openEvents">
+            <div class="gpRowIcon"><v-icon icon="mdi-history" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ t('chat.recent_actions', undefined, 'Recent actions') }}</div>
+              <div class="gpRowMeta">{{ t('chat.groupset_events_meta', undefined, 'Last 50 changes') }}</div>
+            </div>
+            <v-icon icon="mdi-chevron-right" size="18" class="gpChevron" />
           </button>
         </section>
 
@@ -464,6 +1268,74 @@ function copyText(value: string) {
         </section>
       </template>
 
+      <template v-else-if="panelMode === 'slow_mode'">
+        <section class="gpSection">
+          <div class="gpHintStrong">{{ t('chat.groupset_slow_hint', undefined, 'Members can send only one message during the selected interval.') }}</div>
+        </section>
+        <section class="gpSection gpRows">
+          <button v-for="option in SLOW_MODE_OPTIONS" :key="option.seconds" type="button" class="gpRow" @click="setSlowMode(option.seconds)">
+            <div class="gpRowIcon"><v-icon :icon="option.seconds === 0 ? 'mdi-timer-off-outline' : 'mdi-timer-outline'" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ slowModeLabel(t, option.seconds) }}</div>
+            </div>
+            <v-icon v-if="slowModeDraft === option.seconds" icon="mdi-check-bold" size="18" class="gpCheck" />
+          </button>
+        </section>
+      </template>
+
+      <template v-else-if="panelMode === 'discussion'">
+        <section class="gpSection">
+          <div class="gpInfoList">
+            <div class="gpInfoRow">
+              <span class="gpInfoKey">{{ t('chat.groupset_discussion', undefined, 'Linked group') }}</span>
+              <span class="gpInfoValue">{{ discussionRowMeta }}</span>
+            </div>
+          </div>
+          <div class="gpHint">{{ t('chat.groupset_discussion_hint', undefined, 'Pick a group where comments will be discussed.') }}</div>
+        </section>
+        <section class="gpSection gpRows">
+          <button type="button" class="gpRow" @click="setDiscussionChat('')">
+            <div class="gpRowIcon"><v-icon icon="mdi-link-off" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ t('chat.groupset_no_discussion', undefined, 'No discussion') }}</div>
+              <div class="gpRowMeta">{{ t('chat.groupset_no_discussion_meta', undefined, 'The linked group is removed') }}</div>
+            </div>
+            <v-icon v-if="!discussionChatIDDraft" icon="mdi-check-bold" size="18" class="gpCheck" />
+          </button>
+          <button v-for="item in discussionChats" :key="item.id" type="button" class="gpRow" @click="setDiscussionChat(item.id)">
+            <div class="gpRowIcon"><v-icon icon="mdi-account-group-outline" size="20" /></div>
+            <div class="gpRowBody">
+              <div class="gpRowTitle">{{ item.title }}</div>
+              <div v-if="item.public_slug" class="gpRowMeta">@{{ item.public_slug }}</div>
+            </div>
+            <v-icon v-if="discussionChatIDDraft === item.id" icon="mdi-check-bold" size="18" class="gpCheck" />
+          </button>
+          <div v-if="discussionLoading" class="gpHint gpSubHint">{{ t('chat.groupset_loading', undefined, 'Loading...') }}</div>
+          <div v-else-if="discussionError" class="gpError gpSubHint">{{ discussionError }}</div>
+          <div v-else-if="discussionChats.length === 0" class="gpHint gpSubHint">{{ t('chat.groupset_no_groups', undefined, 'No groups found') }}</div>
+        </section>
+      </template>
+
+      <template v-else-if="panelMode === 'events'">
+        <section class="gpSection gpRows">
+          <div v-if="eventsLoading" class="gpHint gpSubHint">{{ t('chat.groupset_loading', undefined, 'Loading...') }}</div>
+          <div v-else-if="eventsError" class="gpError gpSubHint">{{ eventsError }}</div>
+          <div v-else-if="eventRows.length === 0" class="gpHint gpSubHint">{{ t('chat.groupset_events_empty', undefined, 'No recent actions yet') }}</div>
+          <template v-else>
+            <article v-for="row in eventRows" :key="row.id" class="gpEventRow">
+              <div class="gpEventHead">
+                <span class="gpEventAction">{{ row.action }}</span>
+                <span class="gpEventTime">{{ row.time }}</span>
+              </div>
+              <div class="gpEventMeta">
+                <span class="gpEventActor">{{ row.actor }}</span>
+                <span v-if="row.payload" class="gpEventPayload">{{ row.payload }}</span>
+              </div>
+            </article>
+          </template>
+        </section>
+      </template>
+
       <template v-else>
         <section class="gpSection gpRows">
           <article v-for="member in removedUsers" :key="member.id" class="gpMemberRow">
@@ -488,8 +1360,9 @@ function copyText(value: string) {
 
 <style scoped>
 .gpRoot {
-  width: 390px;
+  width: 100%;
   max-width: 100%;
+  min-width: 0;
   flex: 0 0 auto;
   min-height: 100%;
   display: grid;
@@ -550,6 +1423,16 @@ function copyText(value: string) {
   position: relative;
 }
 
+.avatarFileInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 6;
+}
+
 .gpAvatarWrap {
   width: 112px;
   height: 112px;
@@ -586,6 +1469,33 @@ function copyText(value: string) {
   place-items: center;
   background: rgba(15, 23, 42, .24);
   color: #fff;
+}
+
+.gpAvatarActions {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gpAvatarAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--accent-strong);
+  font-size: .8rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.gpAvatarAction--danger {
+  border-color: #f87171;
+  color: #ef4444;
 }
 
 .gpSection {
@@ -837,6 +1747,255 @@ function copyText(value: string) {
   color: var(--text);
   font-size: .92rem;
   line-height: 1.35;
+}
+
+.gpAvatarEmoji {
+  font-size: 44px;
+  line-height: 1;
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.gpEmojiRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gpEmojiPreview {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.gpEmojiInput {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.gpFieldFoot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gpCounter {
+  flex: 0 0 auto;
+  font-size: .74rem;
+  color: var(--text-muted);
+}
+
+.gpTextarea {
+  min-height: 86px;
+  padding: 10px 14px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.gpTextareaWrap {
+  position: relative;
+}
+
+.gpTextareaWithEmoji {
+  padding-right: 40px;
+}
+
+.gpEmojiBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.gpEmojiBtn:hover:not(:disabled),
+.gpEmojiBtnOn {
+  background: var(--surface-soft-hover);
+  color: var(--accent);
+}
+
+.gpEmojiBtn:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.gpEmojiPopover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: min(388px, calc(100vw - 44px));
+}
+
+.gpEmojiPopover :deep(.ep-tabs) {
+  display: none;
+}
+
+.gpInfoList {
+  display: grid;
+  gap: 8px;
+}
+
+.gpInfoRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: .88rem;
+}
+
+.gpInfoKey {
+  color: var(--text-muted);
+}
+
+.gpInfoValue {
+  font-weight: 700;
+  color: var(--text);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.gpChoiceRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gpChoicePill {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  font-size: .82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gpChoicePill.active {
+  border-color: #4a90d9;
+  background: rgba(74, 144, 217, .16);
+  color: var(--accent-strong);
+}
+
+.gpSettingLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gpSettingText {
+  min-width: 0;
+}
+
+.gpToggle {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, .45);
+  cursor: pointer;
+}
+
+.gpToggle.on {
+  background: #4a90d9;
+}
+
+.gpToggleKnob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .15s ease;
+}
+
+.gpToggle.on .gpToggleKnob {
+  transform: translateX(18px);
+}
+
+.gpCheck {
+  color: var(--accent-strong);
+}
+
+.gpSubHint {
+  padding: 10px 0;
+}
+
+.gpEventRow {
+  display: grid;
+  gap: 4px;
+  padding: 10px 0;
+}
+
+.gpEventRow + .gpEventRow {
+  border-top: 1px solid rgba(148, 163, 184, .12);
+}
+
+.gpEventHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gpEventAction {
+  font-size: .9rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.gpEventTime {
+  flex: 0 0 auto;
+  font-size: .76rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.gpEventMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: .8rem;
+  color: var(--text-muted);
+}
+
+.gpEventActor {
+  font-weight: 700;
+  color: var(--text-soft);
+}
+
+.gpEventPayload {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.gpCircleBtn:disabled {
+  opacity: .45;
+  cursor: default;
 }
 
 @media (max-width: 1120px) {

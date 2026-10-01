@@ -3,8 +3,17 @@ type PreloadState = 'pending' | 'fulfilled' | 'rejected'
 const loaded = new Map<string, PreloadState>()
 const inFlight = new Map<string, Promise<void>>()
 
+// A request that never fires load/error (dropped connection, frozen tab) would
+// otherwise keep its slot in `inFlight` forever and hand that dead promise to
+// every future caller.
+const LOAD_TIMEOUT_MS = 20000
+
 function waitForLoad(img: HTMLImageElement): Promise<void> {
   return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      cleanup()
+      reject(new Error('image load timeout'))
+    }, LOAD_TIMEOUT_MS)
     const onLoad = () => {
       cleanup()
       resolve()
@@ -14,6 +23,7 @@ function waitForLoad(img: HTMLImageElement): Promise<void> {
       reject(new Error('image load failed'))
     }
     const cleanup = () => {
+      window.clearTimeout(timer)
       img.removeEventListener('load', onLoad)
       img.removeEventListener('error', onError)
     }
@@ -58,6 +68,8 @@ export function preloadAndDecodeImage(url: string): Promise<void> {
       loaded.set(normalized, 'fulfilled')
     } catch {
       loaded.set(normalized, 'rejected')
+      // Release the connection/decode budget for this URL.
+      img.removeAttribute('src')
     } finally {
       inFlight.delete(normalized)
     }

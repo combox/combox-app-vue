@@ -1,4 +1,4 @@
-const VERSION = 'v3'
+const VERSION = 'v5'
 const SHELL_CACHE = `combox-shell-${VERSION}`
 const ASSET_CACHE = `combox-assets-${VERSION}`
 const API_CACHE = `combox-api-${VERSION}`
@@ -81,14 +81,24 @@ function isStaticAsset(url, req) {
   )
 }
 
+function isJSONManifest(res) {
+  const type = (res.headers.get('content-type') || '').toLowerCase()
+  return res.ok && type.includes('json')
+}
+
 async function cacheShell() {
   const cache = await caches.open(SHELL_CACHE)
   await cache.addAll([
     '/',
     '/index.html',
-    '/manifest.webmanifest',
     '/favicon.ico'
   ])
+  try {
+    const res = await fetch('/manifest.webmanifest')
+    if (isJSONManifest(res)) await cache.put('/manifest.webmanifest', res)
+  } catch {
+    // offline: the manifest is optional, skip it instead of failing install
+  }
 }
 
 self.addEventListener('install', (event) => {
@@ -128,6 +138,18 @@ async function cacheFirst(req, cacheName) {
   if (cached) return cached
   const res = await fetch(req)
   if (res && res.ok) cache.put(req, res.clone())
+  return res
+}
+
+// The anti-bot layer answers /manifest.webmanifest with an HTML challenge
+// before the backend ever sees the request. Never cache that body: it would
+// poison the cache with HTML that the browser keeps failing to parse.
+async function manifestFirst(req) {
+  const cache = await caches.open(ASSET_CACHE)
+  const cached = await cache.match(req)
+  if (cached && isJSONManifest(cached)) return cached
+  const res = await fetch(req)
+  if (isJSONManifest(res)) await cache.put(req, res.clone())
   return res
 }
 
@@ -192,6 +214,22 @@ self.addEventListener('message', (event) => {
   }
 })
 
+self.addEventListener('notificationclick', (event) => {
+  const data = event.notification.data || {}
+  const chatID = typeof data.chatID === 'string' ? data.chatID : ''
+  event.notification.close()
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    const target = windows.find((client) => client.type === 'window')
+    if (target) {
+      await target.focus()
+      target.postMessage({ type: 'combox:notificationclick', chatID })
+      return
+    }
+    await self.clients.openWindow(chatID ? `/#${encodeURIComponent(chatID)}` : '/')
+  })())
+})
+
 self.addEventListener('fetch', (event) => {
   const req = event.request
   const url = new URL(req.url)
@@ -202,6 +240,11 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (url.origin !== self.location.origin) return
+
+  if (url.pathname.endsWith('.webmanifest')) {
+    event.respondWith(manifestFirst(req))
+    return
+  }
 
   if (isStaticAsset(url, req)) {
     if (IS_LOCAL_HOST || url.pathname.includes('hot-update') || url.pathname.includes('websocket')) {

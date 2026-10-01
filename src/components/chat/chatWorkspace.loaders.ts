@@ -18,6 +18,7 @@ import {
   EMPTY_SEARCH_RESULTS,
   GROUP_CHANNELS_CACHE_KEY,
   MSG_CACHE_PREFIX,
+  PENDING_CHAT_PREFIX,
   SELECTED_CHAT_KEY,
   STATUS_CACHE_PREFIX,
   STATUS_GLOBAL_CACHE_KEY,
@@ -189,7 +190,8 @@ export function setupWorkspaceLoaders(input: WorkspaceLoadersInput) {
   }
 
   async function loadMessages(chatID: string) {
-    if (!chatID) {
+    // A pending ("u:") chat has no server-side messages yet.
+    if (!chatID || chatID.startsWith(PENDING_CHAT_PREFIX)) {
       input.rawMessages.value = []
       input.messageStatusesByMessage.value = {}
       return

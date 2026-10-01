@@ -1,0 +1,15 @@
+# ComBox
+
+ComBox is a fast, private messenger that runs in the browser: chats, channels,
+voice rooms, calls and file sharing. Works on desktop and mobile, with light
+and dark themes and English/Russian interface.
+
+- App: [/](/)
+- Sign in / sign up: [/auth](/auth)
+- Settings (account, notifications, privacy, folders, storage): [/settings](/settings)
+- Machine-readable catalog: [/ai-catalog.json](/ai-catalog.json)
+- Crawl rules: [/robots.txt](/robots.txt)
+- PWA manifest: [/manifest.webmanifest](/manifest.webmanifest)
+
+ComBox is a single-page app: every route above serves the same shell and
+requires JavaScript. The API lives under `/api/` and is not crawlable content.

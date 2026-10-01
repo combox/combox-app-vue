@@ -76,6 +76,9 @@ export function setupWorkspaceWatchers(input: SetupWorkspaceWatchersInput) {
         input.peerProfile.value = null
         return
       }
+      // Clear the previous peer before the (async) lookup: otherwise the old
+      // avatar/name stays on screen until the new profile arrives.
+      input.peerProfile.value = null
       try {
         const profile = await input.getUserByIDFn(peerID)
         input.peerProfile.value = input.normalizePeerProfileFn(profile)
@@ -98,7 +101,12 @@ export function setupWorkspaceWatchers(input: SetupWorkspaceWatchersInput) {
     ([connected, peerID]) => {
       const nextPeerID = (peerID || '').trim()
       const prevPeerID = subscribedPresencePeerID.value
-      if (!connected) return
+      if (!connected) {
+        // Subscriptions live on the socket: forget them, otherwise a reconnect
+        // would skip presence.subscribe and peer status would freeze forever.
+        subscribedPresencePeerID.value = ''
+        return
+      }
       if (prevPeerID && prevPeerID !== nextPeerID) {
         void input.sendEvent('presence.unsubscribe', { user_ids: [prevPeerID] })
         subscribedPresencePeerID.value = ''

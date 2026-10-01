@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import ToastHost from './components/core/ToastHost.vue'
+import LegacyMigrationModal from './components/auth/LegacyMigrationModal.vue'
+import PollCreateDialog from './components/chat/PollCreateDialog.vue'
+import FolderImportModal from './components/chat/FolderImportModal.vue'
 import { useI18n } from './i18n/i18n'
+import { closePollCreateDialog, pollCreateTarget } from './utils/pollCreate'
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
@@ -8,6 +14,34 @@ type BeforeInstallPromptEvent = Event & {
 }
 
 const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
+// Landmark audit fix (single change allowed in this file): Home (/) and
+// Settings (/settings) already render exactly one <main> via PageShell, while
+// /auth has none — so only the auth route gets a <main> wrapper here. This
+// keeps exactly one main landmark on every route (nested/duplicated mains
+// would fail the same audit).
+const needsMainLandmark = computed(() => route.path === '/auth' || route.path.startsWith('/auth/'))
+/**
+ * Shared folder deep link (/folder/:token). The modal lives next to ToastHost
+ * — outside <main>/<router-view> — so the single-main-landmark audit stays
+ * green and the route component (HomePage) keeps rendering behind it.
+ */
+const folderInviteToken = computed(() => {
+  if (!route.path.startsWith('/folder/')) return ''
+  const raw = route.params.token
+  const token = Array.isArray(raw) ? raw[0] : raw
+  return String(token || '').trim()
+})
+
+function closeFolderInvite() {
+  void router.push('/')
+}
+
+function onFolderImported() {
+  // The sidebar behind the modal keeps its folder list: poke it to reload.
+  window.dispatchEvent(new Event('combox:folders-changed'))
+}
 const isOffline = ref(!window.navigator.onLine)
 const deferredInstallPrompt = ref<BeforeInstallPromptEvent | null>(null)
 const canInstall = computed(() => Boolean(deferredInstallPrompt.value))
@@ -68,7 +102,13 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-    <router-view />
+    <main v-if="needsMainLandmark"><router-view /></main>
+    <router-view v-else />
+    <PollCreateDialog :chat-id="pollCreateTarget?.chatID ?? ''" @close="closePollCreateDialog" />
+    <FolderImportModal v-if="folderInviteToken" :token="folderInviteToken" @close="closeFolderInvite" @imported="onFolderImported" />
+    <ToastHost />
+    <!-- Legacy email-binding: Teleports to body itself, stays outside <main> like ToastHost. -->
+    <LegacyMigrationModal />
   </v-app>
 </template>
 

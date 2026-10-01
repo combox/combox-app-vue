@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from '../../i18n/i18n'
 import AudioPlayer from './AudioPlayer.vue'
 import type { ResolvedAttachment } from './chatTypes'
+import { attachmentExtLabel, attachmentFileIcon, formatFileSize } from './chatUtils'
+import RoundPlayer from './RoundPlayer.vue'
 import VideoPlayer from './VideoPlayer.vue'
 import { getSharedMediaLazyQueue } from './mediaLazyQueue'
 
@@ -15,6 +18,8 @@ const emit = defineEmits<{
   openVideo: [payload: { attachmentID: string; src: string; poster?: string; filename?: string }]
 }>()
 
+const { t } = useI18n()
+
 const rootEl = ref<HTMLElement | null>(null)
 const imageSrc = ref(props.attachment.previewUrl || props.attachment.url)
 const fullLoaded = ref(!props.attachment.previewUrl)
@@ -24,6 +29,22 @@ const thumbLoaded = ref(false)
 let cleanupVisibility: (() => void) | null = null
 const mediaQueue = getSharedMediaLazyQueue()
 let destroyed = false
+
+const baseMime = computed(() => (props.attachment.mimeType || '').toLowerCase().split(';')[0].trim())
+/** A round recorded with the camera plays as video, the audio-only fallback stays audio. */
+const isRoundVideo = computed(
+  () => Boolean(props.attachment.round) && (baseMime.value.startsWith('video/') || baseMime.value === 'application/ogg'),
+)
+
+const mediaTitle = computed(() => {
+  if (props.attachment.round) return t('chat.video_message', undefined, 'Video message')
+  if (props.attachment.voice) return t('chat.audio_message', undefined, 'Voice message')
+  return props.attachment.filename || ''
+})
+
+const fileIcon = computed(() => attachmentFileIcon(props.attachment.filename || ''))
+const fileExtLabel = computed(() => attachmentExtLabel(props.attachment.filename || ''))
+const fileMetaLabel = computed(() => formatFileSize(props.attachment.sizeBytes || 0))
 
 const isGif = computed(() => {
   const type = (props.attachment.mimeType || '').toLowerCase()
@@ -215,6 +236,25 @@ function videoSizeStyle() {
     </template>
   </button>
 
+  <RoundPlayer
+    v-else-if="isRoundVideo && attachment.url"
+    :src="attachment.url"
+    :poster="attachment.previewUrl"
+    :title="mediaTitle"
+    :duration-ms="attachment.durationMs"
+  />
+
+  <AudioPlayer
+    v-else-if="attachment.round && attachment.url"
+    :src="attachment.url"
+    :attachment-id="attachment.id"
+    :poster="attachment.previewUrl"
+    :title="mediaTitle"
+    :duration-ms="attachment.durationMs"
+    :waveform="attachment.waveform"
+    :round="true"
+  />
+
   <VideoPlayer
     v-else-if="attachment.kind === 'video' && attachment.url"
     :attachment-i-d="attachment.id"
@@ -236,18 +276,39 @@ function videoSizeStyle() {
   <AudioPlayer
     v-else-if="attachment.kind === 'audio'"
     :src="attachment.url"
+    :attachment-id="attachment.id"
     :poster="attachment.previewUrl"
     :pending="!attachment.url"
-    :title="attachment.filename"
+    :title="mediaTitle"
     :duration-ms="attachment.durationMs"
+    :waveform="attachment.waveform"
+    :round="attachment.round"
+    :voice="attachment.voice"
   />
 
-  <a v-else-if="attachment.url" class="file-link" :href="attachment.url" target="_blank" rel="noreferrer">
-    {{ attachment.filename || 'file' }}
+  <a v-else-if="attachment.url" class="fileTile" :href="attachment.url" target="_blank" rel="noreferrer" :title="attachment.filename || undefined">
+    <span class="fileTileIcon" aria-hidden="true">
+      <v-icon :icon="fileIcon" size="24" />
+    </span>
+    <span class="fileTileBody">
+      <span class="fileTileName">{{ attachment.filename || t('common.file', undefined, 'File') }}</span>
+      <span class="fileTileMeta">
+        <span v-if="fileExtLabel" class="fileTileExt">{{ fileExtLabel }}</span>
+        <span v-if="fileMetaLabel">{{ fileMetaLabel }}</span>
+      </span>
+    </span>
+    <span class="fileTileAction" aria-hidden="true">
+      <v-icon icon="mdi-tray-arrow-down" size="18" />
+    </span>
   </a>
 
-  <div v-else class="file-link file-placeholder">
-    {{ attachment.filename || 'file' }}
+  <div v-else class="fileTile fileTilePending">
+    <span class="fileTileIcon" aria-hidden="true">
+      <v-icon :icon="fileIcon" size="24" />
+    </span>
+    <span class="fileTileBody">
+      <span class="fileTileName">{{ attachment.filename || t('common.file', undefined, 'File') }}</span>
+    </span>
   </div>
 </template>
 
@@ -394,13 +455,106 @@ html[data-theme='light'] .media-progress {
   color: var(--text-muted);
 }
 
-.file-link {
+.fileTile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+  max-width: 340px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
   color: inherit;
-  text-decoration: underline;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
-.file-placeholder {
-  display: inline-block;
-  min-width: 140px;
+.fileTile:hover {
+  background: var(--surface-soft-hover, var(--surface-soft));
+  border-color: var(--border-strong);
+}
+
+.fileTilePending {
+  cursor: default;
+}
+
+.fileTileIcon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text-soft);
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.fileTileBody {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.fileTileName {
+  font-size: 13.5px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileTileMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.fileTileExt {
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--surface-strong, var(--surface-soft));
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fileTileAction {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--text-muted);
+}
+
+/* R9: keep voice/audio player compact inside the message bubble. */
+:deep(.audioPlayer) {
+  width: 100%;
+  max-width: 340px;
+  min-width: 0;
+  justify-self: start;
+}
+
+:deep(.audioArt),
+:deep(.audioSide) {
+  flex: 0 0 auto;
+}
+
+:deep(.audioBody) {
+  min-width: 0;
+}
+
+@media (max-width: 560px) {
+  :deep(.audioPlayer) {
+    max-width: min(320px, 100%);
+  }
 }
 </style>

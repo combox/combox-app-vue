@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Backend API is not crawlable content.
+Disallow: /api/

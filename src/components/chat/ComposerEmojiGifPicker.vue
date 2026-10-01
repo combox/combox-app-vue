@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { addRecentGif, listRecentGifs, searchGifs, type GIFItem } from 'combox-api'
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from '../../i18n/i18n'
 
 type PickerTab = 'emoji' | 'gif' | 'stickers'
@@ -148,25 +148,32 @@ const gifLoading = ref(false)
 const gifLoadingMore = ref(false)
 const gifPopularLoadingMore = ref(false)
 const gifApiUnavailable = ref(false)
+// Backend `/gifs/search` returns HTTP 200 with `{ items: [] }` when its upstream
+// provider is not configured (empty GIPHY_API_KEY), so an empty success must not
+// be rendered as "no results". This flag tracks that disabled-probe outcome.
+const gifProviderDisabled = ref(false)
 
 const emptyStateCache = ref<{ recent: GIFItem[]; popular: GIFItem[]; popularNextPos: string } | null>(null)
 const searchCache = new Map<string, { items: GIFItem[]; nextPos: string }>()
+
+// Race guard: overlapping debounced searches / trending probes must not clobber
+// each other when they resolve out of order.
+let gifRequestSeq = 0
 
 let debounceTimer: number | undefined
 watch(gifQuery, (val) => {
   window.clearTimeout(debounceTimer)
   debounceTimer = window.setTimeout(() => { gifQueryDebounced.value = val.trim() }, 260)
 })
+onBeforeUnmount(() => window.clearTimeout(debounceTimer))
 
-watch([() => props.open, tab, gifQueryDebounced], async ([open, currentTab, q]) => {
-  if (!open || currentTab !== 'gif' || gifApiUnavailable.value) return
-  const query = (q as string).trim()
-
+async function loadGifState(query: string): Promise<void> {
   if (!query && emptyStateCache.value) {
     gifRecent.value = emptyStateCache.value.recent
     gifPopular.value = emptyStateCache.value.popular
     gifPopularNextPos.value = emptyStateCache.value.popularNextPos
     gifSearchItems.value = []
+    gifProviderDisabled.value = emptyStateCache.value.popular.length === 0 && emptyStateCache.value.recent.length === 0
     return
   }
   if (query && searchCache.has(query)) {
@@ -176,38 +183,81 @@ watch([() => props.open, tab, gifQueryDebounced], async ([open, currentTab, q]) 
     return
   }
 
+  const mySeq = ++gifRequestSeq
   gifLoading.value = true
   try {
     if (query) {
       const found = await searchGifs({ q: query, limit: 30 })
+      if (mySeq !== gifRequestSeq) return
       gifSearchItems.value = found.items
       gifSearchNextPos.value = found.nextPos
-      searchCache.set(query, { items: found.items, nextPos: found.nextPos })
+      // Cache genuine results. An empty search while trending is known-empty
+      // means "backend has no provider", not "no match" — don't poison the cache.
+      const trendingKnownEmpty = gifProviderDisabled.value || (!emptyStateCache.value && gifPopular.value.length === 0)
+      if (found.items.length > 0 || !trendingKnownEmpty) {
+        searchCache.set(query, { items: found.items, nextPos: found.nextPos })
+      } else {
+        gifProviderDisabled.value = true
+      }
     } else {
       const [recent, popular] = await Promise.all([listRecentGifs(400), searchGifs({ limit: 30 })])
+      if (mySeq !== gifRequestSeq) return
       gifRecent.value = recent
       gifPopular.value = popular.items
       gifPopularNextPos.value = popular.nextPos
       gifSearchItems.value = []
-      emptyStateCache.value = { recent, popular: popular.items, popularNextPos: popular.nextPos }
+      const disabled = popular.items.length === 0
+      gifProviderDisabled.value = disabled
+      // Don't cache the disabled probe: a retry after the backend key is
+      // configured must refetch instead of serving a stale empty snapshot.
+      if (!disabled) {
+        emptyStateCache.value = { recent, popular: popular.items, popularNextPos: popular.nextPos }
+      } else {
+        emptyStateCache.value = null
+      }
     }
   } catch {
+    if (mySeq !== gifRequestSeq) return
     gifApiUnavailable.value = true
   } finally {
-    gifLoading.value = false
+    if (mySeq === gifRequestSeq) gifLoading.value = false
   }
+}
+
+watch([() => props.open, tab, gifQueryDebounced], async ([open, currentTab, q]) => {
+  if (!open || currentTab !== 'gif' || gifApiUnavailable.value) return
+  await loadGifState((q as string).trim())
 }, { immediate: true })
 
-function toCleanGifUrl(raw: string, id?: string): string {
+async function retryGifs(): Promise<void> {
+  gifApiUnavailable.value = false
+  gifProviderDisabled.value = false
+  const query = gifQueryDebounced.value.trim()
+  if (query) searchCache.delete(query)
+  else emptyStateCache.value = null
+  // Bump the sequence so any in-flight stale response is ignored.
+  gifRequestSeq++
+  await loadGifState(query)
+}
+
+// Empty search result while trending is known-empty means the backend provider
+// is disabled/misconfigured — show "unavailable", not "no GIFs found".
+const gifSearchLooksDisabled = computed(
+  () => gifProviderDisabled.value || (!emptyStateCache.value && gifPopular.value.length === 0),
+)
+
+function toCleanGifUrl(raw: string): string {
   const fallback = (raw || '').trim()
   if (!fallback) return ''
-  if (id?.trim()) return `https://giphy.com/gifs/${id.trim()}`
   try { const u = new URL(fallback); u.hash = ''; u.search = ''; return u.toString() } catch { return fallback }
 }
 
 function handleSelectGif(item: GIFItem) {
-  const clean = toCleanGifUrl(item.url, item.id)
-  const normalized = { ...item, url: clean || item.url }
+  // Prefer the direct media URL from the backend (media.giphy.com/.../*.gif) so the
+  // message renders inline as a GIF. Never rewrite it to a giphy.com page URL:
+  // page URLs carry no .gif marker and render as plain links instead of GIFs.
+  const direct = toCleanGifUrl(item.url) || toCleanGifUrl(item.preview_url)
+  const normalized = { ...item, url: direct || item.url }
   emit('selectGif', normalized)
   void addRecentGif(normalized).catch(() => {})
 }
@@ -218,6 +268,7 @@ function handleSelectEmoji(emoji: string) {
 }
 
 async function loadMoreGifs() {
+  if (gifApiUnavailable.value) return
   if (!gifSearchNextPos.value || !gifQueryDebounced.value || gifLoadingMore.value) return
   gifLoadingMore.value = true
   try {
@@ -228,6 +279,7 @@ async function loadMoreGifs() {
 }
 
 async function loadMorePopular() {
+  if (gifApiUnavailable.value) return
   if (!gifPopularNextPos.value || gifPopularLoadingMore.value || gifQueryDebounced.value) return
   gifPopularLoadingMore.value = true
   try {
@@ -269,7 +321,12 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
         </div>
 
         <div class="ep-scroll">
-          <div v-if="gifApiUnavailable" class="ep-empty">{{ t('chat.gif_unavailable', undefined, 'GIF service temporarily unavailable') }}</div>
+          <div v-if="gifApiUnavailable" class="ep-empty">
+            <div>{{ t('chat.gif_unavailable', undefined, 'GIF service temporarily unavailable') }}</div>
+            <button type="button" class="ep-load-more" @click="retryGifs">
+              {{ t('common.retry', undefined, 'Retry') }}
+            </button>
+          </div>
           <div v-else-if="gifLoading" class="ep-gif-grid">
             <div v-for="i in 12" :key="i" class="ep-gif-skeleton" />
           </div>
@@ -297,6 +354,13 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
                 {{ gifPopularLoadingMore ? t('common.loading', undefined, 'Loading…') : t('common.load_more', undefined, 'Load more') }}
               </button>
             </template>
+
+            <template v-if="!gifRecent.length && !gifPopular.length">
+              <div class="ep-empty">{{ t('chat.gif_unavailable', undefined, 'GIF service temporarily unavailable') }}</div>
+              <button type="button" class="ep-load-more" @click="retryGifs">
+                {{ t('common.retry', undefined, 'Retry') }}
+              </button>
+            </template>
           </template>
 
           <template v-else-if="gifQueryDebounced && !gifLoading">
@@ -306,7 +370,14 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
                 <img :src="item.preview_url || item.url" :alt="item.title || 'gif'" loading="lazy" :style="{ opacity: loadedGifs.has(item.id) ? 1 : 0 }" @load="onGifLoad(item.id)" @error="onGifLoad(item.id)" />
               </button>
             </div>
-            <div v-if="!gifSearchItems.length" class="ep-empty">{{ t('chat.gif_not_found', undefined, 'No GIFs found') }}</div>
+            <div v-if="!gifSearchItems.length" class="ep-empty">
+              {{ gifSearchLooksDisabled
+                ? t('chat.gif_unavailable', undefined, 'GIF service temporarily unavailable')
+                : t('chat.gif_not_found', undefined, 'No GIFs found') }}
+            </div>
+            <button v-if="!gifSearchItems.length && gifSearchLooksDisabled" type="button" class="ep-load-more" @click="retryGifs">
+              {{ t('common.retry', undefined, 'Retry') }}
+            </button>
             <button v-if="gifSearchNextPos" type="button" class="ep-load-more" :disabled="gifLoadingMore" @click="loadMoreGifs">
               {{ gifLoadingMore ? t('common.loading', undefined, 'Loading…') : t('common.load_more', undefined, 'Load more') }}
             </button>
@@ -338,6 +409,7 @@ function onGifLoad(id: string) { loadedGifs.value = new Set([...loadedGifs.value
 
 <style scoped>
 .ep {
+  animation: uiPopIn 140ms cubic-bezier(0.2, 0.7, 0.3, 1);
   width: 388px;
   height: 432px;
   background: var(--surface-strong);
@@ -591,5 +663,12 @@ html[data-theme='light'] .ep-gif-skeleton-inner {
 .ep-tab.active {
   background: var(--accent-soft);
   color: var(--accent);
+}
+@keyframes uiPopIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ep { animation: none; }
 }
 </style>

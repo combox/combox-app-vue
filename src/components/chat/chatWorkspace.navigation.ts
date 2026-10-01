@@ -1,5 +1,5 @@
 import type { ComputedRef, Ref } from 'vue'
-import { acceptChannelInviteLink, acceptChatInvite, getStandaloneChannel, searchDirectory, type ChatItem, type ChatMemberProfile } from 'combox-api'
+import { acceptChannelInviteLink, acceptChatInvite, getStandaloneChannel, getUserByID, searchDirectory, type ChatItem, type ChatMemberProfile } from 'combox-api'
 import type { ViewMessage } from './chatTypes'
 import { CHATS_CACHE_KEY, PENDING_CHAT_PREFIX } from './chatWorkspace.constants'
 import { clearHash, readChatSelectionFromHash, readInviteLinkTokenFromHash, readInviteTokenFromHash, readPublicSlugFromHash, setHashToChatId } from './chatWorkspace.hash'
@@ -41,6 +41,13 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
       const groupID = selected && (selected.kind || '').trim() === 'group' ? selected.id : ''
       if (groupID) {
         if (!input.groupChannelsOpen.value) input.groupChannelsOpen.value = true
+        // Re-issuing the same group id means "collapse back to the topics
+        // list": drop the open channel first, otherwise the previously
+        // selected channel pops right back open instead of the list.
+        if ((input.selectedGroupChannelByGroupId.value[groupID] || '').trim()) {
+          input.selectedGroupChannelByGroupId.value = { ...input.selectedGroupChannelByGroupId.value, [groupID]: '' }
+          input.persistGroupSelection()
+        }
         await input.loadGroupChannels(groupID)
       }
       return
@@ -75,8 +82,7 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
   async function selectDirectoryChat(chat: Partial<ChatItem> & { id: string; title: string; kind?: string }) {
     const chatID = (chat.id || '').trim()
     if (!chatID) return
-    const rawKind = (chat.kind || '').trim()
-  const normalizedKind = rawKind
+    const normalizedKind = (chat.kind || '').trim()
     const normalizedChat = {
       id: chatID,
       title: (chat.title || '').trim() || 'Channel',
@@ -92,16 +98,12 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
       last_message_preview: chat.last_message_preview,
       created_at: chat.created_at || new Date().toISOString(),
     } as ChatItem
-    const isPublicPreviewOnly =
-      (normalizedChat.kind || '').trim() === 'standalone_channel' &&
-      !String(normalizedChat.viewer_role || '').trim() &&
-      !input.chats.value.some((item) => item.id === chatID)
 
-    if (isPublicPreviewOnly) {
+    // A directory hit may not be in the list yet (new subscription, list still
+    // loading). Show it as a preview instead of injecting a synthetic chat:
+    // injected rows used to survive in the chat cache as ghost "standard" chats.
+    if (!input.chats.value.some((item) => item.id === chatID)) {
       input.invitePreviewChat.value = normalizedChat
-    } else if (!input.chats.value.some((item) => item.id === chatID)) {
-      input.chats.value = [normalizedChat, ...input.chats.value]
-      writeJSON(CHATS_CACHE_KEY, input.chats.value)
     }
     if ((normalizedChat.kind || '').trim() === 'standalone_channel') {
       try {
@@ -113,7 +115,24 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
     await selectChat(chatID)
   }
 
-  async function openDirectChatWithUser(userIDRaw: string) {
+  function pendingDirectChatID(userID: string): string {
+    return `${PENDING_CHAT_PREFIX}${userID}`
+  }
+
+  async function fillPendingDirectTitle(userID: string, pendingID: string) {
+    try {
+      const user = await getUserByID(userID)
+      const name = `${user.first_name || ''} ${user.last_name || ''}`.trim() || (user.username || '').trim()
+      if (!name || input.invitePreviewChat.value?.id !== pendingID) return
+      input.invitePreviewChat.value = { ...input.invitePreviewChat.value, title: name }
+    } catch {
+      // the preview keeps the title it was opened with
+    }
+  }
+
+  // Opens a conversation without creating it server-side: the chat is created
+  // on the first outgoing message (resolvePendingDirectChat).
+  async function openDirectChatWithUser(userIDRaw: string, titleHint?: string) {
     const userID = (userIDRaw || '').trim()
     if (!userID) return
     const existing = input.chats.value.find((chat) => Boolean(chat.is_direct) && (chat.peer_user_id || '').trim() === userID)
@@ -121,13 +140,53 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
       await selectChat(existing.id)
       return
     }
-    const payload = await input.directChatClient.openDirectChat({ recipient_user_id: userID })
-    if (!input.chats.value.some((item) => item.id === payload.chat.id)) {
-      input.chats.value = [payload.chat, ...input.chats.value]
+    const pendingID = pendingDirectChatID(userID)
+    const title = (titleHint || '').trim()
+    input.invitePreviewChat.value = {
+      id: pendingID,
+      title,
+      is_direct: true,
+      type: 'standard',
+      kind: 'direct',
+      peer_user_id: userID,
+      created_at: new Date().toISOString(),
+    } as ChatItem
+    await selectChat(pendingID)
+    if (!title) void fillPendingDirectTitle(userID, pendingID)
+  }
+
+  async function adoptDirectChat(pendingID: string, chat: ChatItem) {
+    const chatID = (chat?.id || '').trim()
+    if (!chatID) return
+    if (!input.chats.value.some((item) => item.id === chatID)) {
+      input.chats.value = [chat, ...input.chats.value]
       writeJSON(CHATS_CACHE_KEY, input.chats.value)
     }
-    await input.loadChats()
-    await selectChat(payload.chat.id)
+    if (input.invitePreviewChat.value?.id === pendingID) input.invitePreviewChat.value = null
+    if (input.selectedChatID.value === pendingID) await selectChat(chatID)
+  }
+
+  async function resolvePendingDirectChat(pendingIDRaw: string): Promise<string> {
+    const pendingID = (pendingIDRaw || '').trim()
+    if (!pendingID.startsWith(PENDING_CHAT_PREFIX)) return pendingID
+    const userID = pendingID.slice(PENDING_CHAT_PREFIX.length).trim()
+    if (!userID) return ''
+
+    const existing = input.chats.value.find((chat) => Boolean(chat.is_direct) && (chat.peer_user_id || '').trim() === userID)
+    if (existing?.id) {
+      await adoptDirectChat(pendingID, existing)
+      return existing.id
+    }
+    try {
+      const payload = await input.directChatClient.openDirectChat({ recipient_user_id: userID })
+      const chat = payload.chat
+      if (!chat?.id) return ''
+      await adoptDirectChat(pendingID, chat)
+      void input.loadChats()
+      return chat.id
+    } catch {
+      return ''
+    }
   }
 
   async function openDirectChatByUsername(usernameRaw: string) {
@@ -147,7 +206,8 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
     const results = await searchDirectory({ q: username, scope: 'users', limit: 20 } as never)
     const exact = (results.users || []).find((item) => (item.username || '').trim().toLowerCase() === username)
     if (!exact?.id) return
-    await openDirectChatWithUser(exact.id)
+    const title = `${exact.first_name || ''} ${exact.last_name || ''}`.trim() || exact.username
+    await openDirectChatWithUser(exact.id, title)
   }
 
   async function acceptInviteFromHashIfNeeded() {
@@ -257,6 +317,7 @@ export function setupWorkspaceNavigation(input: WorkspaceNavigationInput) {
     selectDirectoryChat,
     openDirectChatWithUser,
     openDirectChatByUsername,
+    resolvePendingDirectChat,
     acceptInviteFromHashIfNeeded,
     acceptInviteLinkFromHashIfNeeded,
     openChannelFromHashIfNeeded,

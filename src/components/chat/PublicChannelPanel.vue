@@ -2,7 +2,10 @@
 import { computed, ref, watch } from 'vue'
 import type { AuthUser, ChatInviteLink, ChatItem, ChatMemberProfile } from 'combox-api'
 import { normalizeAvatarSrc } from './chatUtils'
+import { openAvatarPreview } from '../../utils/avatarViewer'
+import { avatarColorFor } from '../../utils/avatarColor'
 import { useI18n } from '../../i18n/i18n'
+import { useToast } from '../../composables/useToast'
 
 type PublicRole = 'subscriber' | 'admin' | 'banned'
 type PanelMode = 'info' | 'edit' | 'subscribers' | 'admins' | 'removed' | 'links'
@@ -39,6 +42,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const toast = useToast()
 const panelMode = ref<PanelMode>('info')
 const titleDraft = ref((props.selectedChat?.title || '').trim())
 const avatarPreview = ref(normalizeAvatarSrc(props.selectedChat?.avatar_data_url || ''))
@@ -54,8 +58,45 @@ const reportNotice = ref('')
 const viewerRole = computed(() => ((props.selectedChat?.viewer_role || '').trim().toLowerCase()))
 const canManage = computed(() => viewerRole.value === 'owner' || viewerRole.value === 'admin')
 const canViewMembers = computed(() => canManage.value)
-const isSubscribed = computed(() => ['owner', 'admin', 'subscriber'].includes(viewerRole.value))
-const subscriberCount = computed(() => Number(props.selectedChat?.subscriber_count || props.chatMembers.length || 0))
+// L6: rows migrated by the boxchat ETL may carry role 'member', which is not
+// a valid standalone_channel role but still means "subscribed" — the backend
+// normalizes it to 'subscriber' on subscribe, the client must already treat
+// it as subscribed so the button reads Unsubscribe.
+const serverSubscribed = computed(() => ['owner', 'admin', 'subscriber', 'member'].includes(viewerRole.value))
+const baseSubscriberCount = computed(() => Number(props.selectedChat?.subscriber_count || props.chatMembers.length || 0))
+// Optimistic toggle: flip instantly on click; the parent's server patch
+// confirms it through props. Roll back with a toast when nothing confirms.
+const subscribePending = ref<boolean | null>(null)
+const subscribeCountDelta = ref(0)
+let subscribeRevertTimer: number | null = null
+const isSubscribed = computed(() => subscribePending.value ?? serverSubscribed.value)
+const subscriberCount = computed(() => Math.max(0, baseSubscriberCount.value + subscribeCountDelta.value))
+function clearSubscribeOptimism() {
+  subscribePending.value = null
+  subscribeCountDelta.value = 0
+  if (subscribeRevertTimer !== null) {
+    window.clearTimeout(subscribeRevertTimer)
+    subscribeRevertTimer = null
+  }
+}
+watch([serverSubscribed, baseSubscriberCount], ([server]) => {
+  if (subscribePending.value !== null && server === subscribePending.value) clearSubscribeOptimism()
+})
+function onToggleSubscribe() {
+  if (subscribePending.value !== null) return
+  const next = !isSubscribed.value
+  subscribePending.value = next
+  subscribeCountDelta.value = next ? 1 : -1
+  emit(next ? 'subscribe' : 'unsubscribe')
+  subscribeRevertTimer = window.setTimeout(() => {
+    if (subscribePending.value === null) return
+    const failed = subscribePending.value
+    clearSubscribeOptimism()
+    toast.error(failed
+      ? t('chat.subscribe_failed', undefined, 'Could not subscribe')
+      : t('chat.unsubscribe_failed', undefined, 'Could not unsubscribe'))
+  }, 8000)
+}
 const channelUsername = computed(() => {
   const slug = (props.selectedChat?.public_slug || '').trim().replace(/^@+/, '')
   return slug ? `@${slug}` : ''
@@ -140,27 +181,34 @@ function reportChannel() {
   }, 2200)
 }
 
-function openAvatarPicker() {
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = 'image/*'
-  input.onchange = () => {
-    const file = input.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : ''
-      if (!result) return
-      avatarDataUrl.value = result
-      avatarPreview.value = result
-      saveError.value = ''
-    }
-    reader.onerror = () => {
-      saveError.value = t('chat.save_group_error', undefined, 'Unable to read avatar file')
-    }
-    reader.readAsDataURL(file)
+function onAvatarPick(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const result = typeof reader.result === 'string' ? reader.result : ''
+    if (!result) return
+    avatarDataUrl.value = result
+    avatarPreview.value = result
+    saveError.value = ''
   }
-  input.click()
+  reader.onerror = () => {
+    saveError.value = t('chat.save_group_error', undefined, 'Unable to read avatar file')
+  }
+  reader.readAsDataURL(file)
+}
+
+function clearAvatar() {
+  avatarDataUrl.value = ''
+  avatarPreview.value = ''
+}
+
+function previewAvatar() {
+  if (!avatarPreview.value) return
+  const chatID = (props.selectedChat?.id || '').trim()
+  openAvatarPreview(avatarPreview.value, displayName.value, chatID ? { ownerId: chatID, ownerKind: 'chat' } : undefined)
 }
 
 function saveProfile() {
@@ -257,8 +305,16 @@ function setChannelType(nextPublic: boolean) {
     <div class="pcScroll">
       <template v-if="panelMode === 'info'">
         <section class="pcHero">
-          <div v-if="avatarPreview" class="pcAvatar"><img :src="avatarPreview" alt="" class="pcAvatarImg" /></div>
-          <div v-else class="pcAvatar pcAvatar--fallback">{{ avatarLetter }}</div>
+          <button
+            v-if="avatarPreview"
+            type="button"
+            class="pcAvatar pcAvatar--btn"
+            :aria-label="t('chat.preview_avatar', undefined, 'Preview avatar')"
+            @click="previewAvatar"
+          >
+            <img :src="avatarPreview" alt="" class="pcAvatarImg" />
+          </button>
+            <div v-else class="pcAvatar pcAvatar--fallback" :style="{ background: avatarColorFor(selectedChat?.id || selectedChat?.title || '') }">{{ avatarLetter }}</div>
           <div class="pcName">{{ displayName }}</div>
           <div class="pcSubtitle">{{ t('chat.subscribers', { count: subscriberCount }, `${subscriberCount} subscribers`) }}</div>
           <div class="pcHeroBadge">{{ channelTypeLabel }}</div>
@@ -269,7 +325,7 @@ function setChannelType(nextPublic: boolean) {
             <v-icon :icon="props.muted ? 'mdi-bell-ring-outline' : 'mdi-bell-off-outline'" size="22" />
             <span>{{ props.muted ? t('chat.unmute', undefined, 'Unmute') : t('chat.mute', undefined, 'Mute') }}</span>
           </button>
-          <button type="button" class="pcActionTile pcActionTile--wide" @click="isSubscribed ? emit('unsubscribe') : emit('subscribe')">
+          <button type="button" class="pcActionTile pcActionTile--wide" @click="onToggleSubscribe">
             <v-icon :icon="isSubscribed ? 'mdi-account-minus-outline' : 'mdi-account-plus-outline'" size="22" />
             <span>{{ isSubscribed ? t('chat.unsubscribe', undefined, 'Unsubscribe') : t('chat.subscribe', undefined, 'Subscribe') }}</span>
           </button>
@@ -352,11 +408,22 @@ function setChannelType(nextPublic: boolean) {
 
       <template v-else-if="panelMode === 'edit'">
         <section class="pcEditHero">
-          <button type="button" class="pcEditAvatarBtn" @click="openAvatarPicker">
+          <label class="pcEditAvatarBtn">
+            <input type="file" accept="image/*" class="avatarFileInput" @change="onAvatarPick" />
             <div v-if="avatarPreview" class="pcAvatar"><img :src="avatarPreview" alt="" class="pcAvatarImg" /></div>
-            <div v-else class="pcAvatar pcAvatar--fallback">{{ avatarLetter }}</div>
+          <div v-else class="pcAvatar pcAvatar--fallback" :style="{ background: avatarColorFor(selectedChat?.id || selectedChat?.title || '') }">{{ avatarLetter }}</div>
             <div class="pcAvatarOverlay"><v-icon icon="mdi-camera-plus-outline" size="28" /></div>
-          </button>
+          </label>
+          <div v-if="avatarPreview" class="pcAvatarActions">
+            <button type="button" class="pcAvatarAction" @click="previewAvatar">
+              <v-icon icon="mdi-magnify-plus-outline" size="16" />
+              {{ t('chat.preview_avatar', undefined, 'Preview') }}
+            </button>
+            <button type="button" class="pcAvatarAction pcAvatarAction--danger" @click="clearAvatar">
+              <v-icon icon="mdi-close-circle-outline" size="16" />
+              {{ t('chat.clear_avatar', undefined, 'Remove') }}
+            </button>
+          </div>
         </section>
 
         <section class="pcCard">
@@ -486,7 +553,7 @@ function setChannelType(nextPublic: boolean) {
           <article v-for="item in subscriberItems" :key="item.id" class="pcMemberRow" @click="emit('openDirectChat', item.id)">
             <div class="pcMemberAvatar">
               <img v-if="item.avatarSrc" :src="item.avatarSrc" alt="" class="pcMemberAvatarImg" />
-              <span v-else class="pcMemberAvatarFallback">{{ item.displayName.slice(0, 1).toUpperCase() }}</span>
+              <span v-else class="pcMemberAvatarFallback" :style="{ background: avatarColorFor(item.id) }">{{ item.displayName.slice(0, 1).toUpperCase() }}</span>
             </div>
             <div class="pcMemberBody">
               <div class="pcMemberName">{{ item.displayName }}</div>
@@ -533,7 +600,7 @@ function setChannelType(nextPublic: boolean) {
           <article v-for="item in adminItems" :key="item.id" class="pcMemberRow" @click="emit('openDirectChat', item.id)">
             <div class="pcMemberAvatar">
               <img v-if="item.avatarSrc" :src="item.avatarSrc" alt="" class="pcMemberAvatarImg" />
-              <span v-else class="pcMemberAvatarFallback">{{ item.displayName.slice(0, 1).toUpperCase() }}</span>
+              <span v-else class="pcMemberAvatarFallback" :style="{ background: avatarColorFor(item.id) }">{{ item.displayName.slice(0, 1).toUpperCase() }}</span>
             </div>
             <div class="pcMemberBody">
               <div class="pcMemberName">{{ item.displayName }}</div>
@@ -560,7 +627,7 @@ function setChannelType(nextPublic: boolean) {
           <article v-for="item in removedItems" :key="item.id" class="pcMemberRow" @click="emit('openDirectChat', item.id)">
             <div class="pcMemberAvatar">
               <img v-if="item.avatarSrc" :src="item.avatarSrc" alt="" class="pcMemberAvatarImg" />
-              <span v-else class="pcMemberAvatarFallback">{{ item.displayName.slice(0, 1).toUpperCase() }}</span>
+              <span v-else class="pcMemberAvatarFallback" :style="{ background: avatarColorFor(item.id) }">{{ item.displayName.slice(0, 1).toUpperCase() }}</span>
             </div>
             <div class="pcMemberBody">
               <div class="pcMemberName">{{ item.displayName }}</div>
@@ -586,7 +653,9 @@ function setChannelType(nextPublic: boolean) {
 
 <style scoped>
 .pcRoot {
-  width: 410px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   flex: 0 0 auto;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -670,6 +739,40 @@ function setChannelType(nextPublic: boolean) {
   color: #fff;
   font-size: 2rem;
   font-weight: 800;
+}
+
+.pcAvatar--btn {
+  border: 0;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.pcAvatarActions {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pcAvatarAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--accent-strong);
+  font-size: .8rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pcAvatarAction--danger {
+  border-color: #f87171;
+  color: #ef4444;
 }
 
 .pcAvatarImg,
@@ -827,6 +930,16 @@ function setChannelType(nextPublic: boolean) {
   padding: 0;
   cursor: pointer;
   position: relative;
+}
+
+.avatarFileInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 6;
 }
 
 .pcAvatarOverlay {

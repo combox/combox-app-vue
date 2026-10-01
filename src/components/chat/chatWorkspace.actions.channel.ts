@@ -1,5 +1,6 @@
 import { createChatInviteLink, createStandaloneChannel, removeChannelMember, subscribeChannel, unsubscribeChannel, updateChannelMemberRole, updateChat, updateStandaloneChannel } from 'combox-api'
 import { CHATS_CACHE_KEY } from './chatWorkspace.constants'
+import { normalizeAvatarSrc } from './chatUtils'
 import { writeJSON } from './chatWorkspace.storage'
 import type { GroupProfileInput, WorkspaceActionsInput } from './chatWorkspace.actions.shared'
 
@@ -31,8 +32,12 @@ export function createChannelActions(input: WorkspaceActionsInput) {
       const payload = await subscribeChannel(chatID)
       const currentCount = Number(active?.subscriber_count || 0)
       const newRole = (payload.chat?.viewer_role || 'subscriber').trim().toLowerCase()
+      const returnedAvatar = (payload.chat?.avatar_data_url || '').trim()
       input.patchChatLocally(chatID, {
         ...payload.chat,
+        // Keep the avatar the list already renders when the response carries an
+        // unresolved storage key instead of a usable image URL.
+        avatar_data_url: normalizeAvatarSrc(returnedAvatar) ? returnedAvatar : active?.avatar_data_url || '',
         viewer_role: payload.chat?.viewer_role || 'subscriber',
         subscriber_count: payload.chat?.subscriber_count ?? Math.max(1, currentCount + 1),
       })

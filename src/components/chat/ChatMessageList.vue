@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from '../../i18n/i18n'
 import MessageContextMenu from './MessageContextMenu.vue'
 import MessageBubble from './MessageBubble.vue'
 import ReactionEmojiPicker from './ReactionEmojiPicker.vue'
 import type { ViewMessage } from './chatTypes'
 import type { MessageStatus } from './chatWorkspace.types'
+import type { ChatCallItem } from 'combox-api'
+import { deleteChatCall } from 'combox-api'
+import { useToast } from '../../composables/useToast'
+import { registerChatListActions, unregisterChatListActions } from '../../utils/chatListActions'
+import { CHAT_LIST_ACTIONS } from './chatWorkspace.actions.list'
 import { getSharedMediaLazyQueue } from './mediaLazyQueue'
 
 const CHAT_SCROLL_STORAGE_KEY = 'combox.chat.scroll.v1'
@@ -16,11 +21,17 @@ const emit = defineEmits<{
   react: [payload: { messageID: string; emoji: string }]
   openContextMenu: [payload: { x: number; y: number; message: ViewMessage }]
   closeContextMenu: []
-  copyContextMessage: []
+  openReactionPicker: [payload: { x: number; y: number; messageId: string }]
+  copyContextMessage: [text?: string]
+  unpinPinnedMessage: []
   replyContextMessage: []
   forwardContextMessage: []
   editContextMessage: []
   deleteContextMessage: []
+  saveContextMessage: []
+  pinContextMessage: []
+  copyLinkContextMessage: []
+  reportContextMessage: []
   openContextReactionPicker: []
   closeContextReactionPicker: []
   selectReactionFromPicker: [emoji: string]
@@ -33,11 +44,12 @@ const emit = defineEmits<{
   forwardSelectedMessages: [messages: ViewMessage[]]
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const props = defineProps<{
   loading: boolean
   errorText: string
   messages: ViewMessage[]
+  callRows?: ChatCallItem[]
   selectedChatID: string
   isPublicChannel?: boolean
   discussionMode?: boolean
@@ -57,12 +69,22 @@ const props = defineProps<{
   deliveryStatusByMessage: Record<string, MessageStatus>
   canEditContextMessage?: boolean
   canDeleteContextMessage?: boolean
+  canSaveContextMessage?: boolean
+  canPinContextMessage?: boolean
+  pinnedContextMessage?: boolean
+  pinnedMessage?: ViewMessage | null
+  channelTitle?: string
 }>()
 
 type MessageThread = {
   post: ViewMessage
   comments: ViewMessage[]
 }
+
+const contextReactions = computed(() => props.contextMenu?.message?.raw.reactions || [])
+
+const contextReactionNames = computed(() => props.senderNameByUserId || {})
+const contextReactionAvatars = computed(() => props.avatarByUserId || {})
 
 const containerRef = ref<HTMLElement | null>(null)
 const isNearBottom = ref(true)
@@ -107,11 +129,86 @@ function toggleSelectMessage(message: ViewMessage) {
   if (selectedMessageIds.value.size === 0) selectionMode.value = false
 }
 
+function selectFromContextMenu() {
+  const message = props.contextMenu?.message
+  emit('closeContextMenu')
+  if (message) toggleSelectMessage(message)
+}
+
 function forwardSelection() {
   const list = selectedMessages.value
   if (list.length === 0) return
   emit('forwardSelectedMessages', list)
   clearSelection()
+}
+
+const toast = useToast()
+
+const deletedCallIds = ref<Set<string>>(new Set())
+const callContextMenu = ref<{ x: number; y: number; call: ChatCallItem } | null>(null)
+
+function openCallContextMenu(event: MouseEvent, call: ChatCallItem) {
+  event.preventDefault()
+  emit('closeContextMenu')
+  callContextMenu.value = { x: event.clientX, y: event.clientY, call }
+}
+
+function closeCallContextMenu() {
+  callContextMenu.value = null
+}
+
+async function deleteCallFromMenu() {
+  const target = callContextMenu.value
+  callContextMenu.value = null
+  if (!target) return
+  const chatID = (props.selectedChatID || '').trim()
+  const callID = (target.call.id || '').trim()
+  if (!chatID || !callID) return
+
+  const previous = new Set(deletedCallIds.value)
+  previous.add(callID)
+  deletedCallIds.value = previous
+
+  try {
+    await deleteChatCall(chatID, callID)
+    toast.success(t('chat.call_deleted', undefined, 'Call history entry removed'))
+  } catch (error) {
+    const restored = new Set(deletedCallIds.value)
+    restored.delete(callID)
+    deletedCallIds.value = restored
+    toast.error(error instanceof Error ? error.message : t('chat.call_delete_failed', undefined, 'Could not delete the call'))
+  }
+}
+
+const pinnedBannerVisible = computed(() => {
+  const pinned = props.pinnedMessage
+  if (!pinned) return false
+  const id = String(pinned.raw.id || '').trim()
+  if (!id) return false
+  return props.messages.some((message) => String(message.raw.id || '').trim() === id)
+})
+
+const pinnedPreview = computed(() => {
+  const pinned = props.pinnedMessage
+  if (!pinned) return ''
+  const text = (pinned.text || '').trim()
+  if (text) return text
+  const first = pinned.attachments[0]
+  if (first) return first.filename || t('chat.message', undefined, 'Message')
+  return t('chat.message', undefined, 'Message')
+})
+
+const pinnedTitle = computed(() => {
+  const pinned = props.pinnedMessage
+  if (!pinned) return ''
+  const userID = String(pinned.raw.user_id || '').trim()
+  const name = userID ? ((props.senderNameByUserId || {})[userID] || '').trim() : ''
+  return name || t('chat.pinned_message', undefined, 'Pinned message')
+})
+
+function unpinFromBanner() {
+  if (props.canPinContextMessage === false) return
+  emit('unpinPinnedMessage')
 }
 
 function lockMediaDuringScroll() {
@@ -336,9 +433,128 @@ const threadedMessages = computed<MessageThread[]>(() => {
   return threaded
 })
 
+type FeedRow =
+  | { kind: 'date'; key: string; label: string }
+  | { kind: 'call'; key: string; call: ChatCallItem }
+  | { kind: 'thread'; key: string; threadIndex: number; thread: MessageThread }
+
+function callTime(value: string): number {
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function dayKeyAndLabel(value: string): { key: string; label: string } | null {
+  const parsed = Date.parse(value)
+  if (!Number.isFinite(parsed)) return null
+  const date = new Date(parsed)
+  const startOfDay = (input: Date) => new Date(input.getFullYear(), input.getMonth(), input.getDate()).getTime()
+  const dayDiff = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86400000)
+  const key = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
+  if (dayDiff === 0) return { key, label: t('chat.date.today', undefined, 'Today') }
+  if (dayDiff === 1) return { key, label: t('chat.date.yesterday', undefined, 'Yesterday') }
+  const month = new Intl.DateTimeFormat(locale.value, { month: 'long' }).format(date)
+  return { key, label: `${date.getDate()} ${month} ${date.getFullYear()}` }
+}
+
+function callDurationText(secondsRaw: number): string {
+  const total = Math.max(0, Math.floor(secondsRaw))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const rest = total % 60
+  const mm = String(minutes).padStart(2, '0')
+  const ss = String(rest).padStart(2, '0')
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`
+}
+
+function isStreamCall(call: ChatCallItem): boolean {
+  return (call.kind || '').trim() === 'broadcast'
+}
+
+function callRowIcon(call: ChatCallItem): string {
+  if (isStreamCall(call)) return 'mdi-broadcast'
+  return call.missed ? 'mdi-phone-off' : 'mdi-phone'
+}
+
+function callRowText(call: ChatCallItem): string {
+  if (isStreamCall(call)) {
+    const label = t('chat.stream.live', undefined, 'Live stream')
+    const streamSeconds = Number(call.duration_seconds) || 0
+    return streamSeconds > 0 ? `${label} · ${callDurationText(streamSeconds)}` : label
+  }
+  if (call.missed) return t('chat.call.missed', undefined, 'Missed call')
+  const label = call.direction === 'outgoing' ? t('chat.call.outgoing', undefined, 'Outgoing call') : t('chat.call.incoming', undefined, 'Incoming call')
+  const seconds = Number(call.duration_seconds) || 0
+  if (seconds <= 0) return label
+  return `${label} · ${callDurationText(seconds)}`
+}
+
+function callRowTime(call: ChatCallItem): string {
+  const parsed = Date.parse(call.started_at)
+  if (!Number.isFinite(parsed)) return ''
+  return new Intl.DateTimeFormat(locale.value, { hour: '2-digit', minute: '2-digit' }).format(new Date(parsed))
+}
+
+const feedRows = computed<FeedRow[]>(() => {
+  const threads = threadedMessages.value
+  const rows: FeedRow[] = []
+  const usedKeys = new Set<string>()
+  const uniqueKey = (base: string): string => {
+    let key = base
+    let suffix = 2
+    while (usedKeys.has(key)) {
+      key = `${base}:${suffix}`
+      suffix += 1
+    }
+    usedKeys.add(key)
+    return key
+  }
+  const searching = Boolean(props.messageSearch.trim())
+  const calls = searching
+    ? []
+    : (props.callRows || [])
+        .filter((call) => !deletedCallIds.value.has(String(call.id || '').trim()))
+        .slice()
+        .sort((a, b) => callTime(a.started_at) - callTime(b.started_at))
+
+  let lastDayKey = ''
+  const pushDay = (value: string) => {
+    const info = dayKeyAndLabel(value)
+    if (!info || info.key === lastDayKey) return
+    lastDayKey = info.key
+    rows.push({ kind: 'date', key: uniqueKey(`date:${info.key}`), label: info.label })
+  }
+  const pushCall = (call: ChatCallItem) => {
+    pushDay(call.started_at)
+    rows.push({ kind: 'call', key: uniqueKey(`call:${call.id}`), call })
+  }
+
+  let callIndex = 0
+  for (let index = 0; index < threads.length; index += 1) {
+    const thread = threads[index]
+    const threadTime = callTime(thread.post.raw.created_at)
+    while (callIndex < calls.length && callTime(calls[callIndex].started_at) <= threadTime) {
+      pushCall(calls[callIndex])
+      callIndex += 1
+    }
+    pushDay(thread.post.raw.created_at)
+    rows.push({ kind: 'thread', key: uniqueKey(`thread:${thread.post.raw.id}`), threadIndex: index, thread })
+  }
+  while (callIndex < calls.length) {
+    pushCall(calls[callIndex])
+    callIndex += 1
+  }
+  return rows
+})
+
+const visibleCallCount = computed(
+  () => (props.callRows || []).filter((call) => !deletedCallIds.value.has(String(call.id || '').trim())).length,
+)
+
 watch(
   () => props.selectedChatID,
   (chatID, prevChatID) => {
+    deletedCallIds.value = new Set()
+    callContextMenu.value = null
     const container = containerRef.value
     if (container && prevChatID && !props.messageSearch) {
       persistScrollPosition(prevChatID, container.scrollTop)
@@ -358,13 +574,32 @@ const handlePageHide = () => {
   flushScrollStorageNow()
 }
 
+/**
+ * Bridge for the three-dot chat menu ("To Beginning" / "Clear history").
+ * The list is prop driven, so `reload` re-uses the workspace history loader
+ * instead of fetching anything itself.
+ */
+const workspaceListActions = inject(CHAT_LIST_ACTIONS, null)
+
+function scrollToTop() {
+  const container = containerRef.value
+  if (!container) return
+  container.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function reload() {
+  void workspaceListActions?.reloadActiveChat()
+}
+
 onMounted(() => {
   // `beforeunload` disables BFCache. Use `pagehide` instead.
   window.addEventListener('pagehide', handlePageHide)
+  registerChatListActions(workspaceListActions ? { scrollToTop, reload } : { scrollToTop })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('pagehide', handlePageHide)
+  unregisterChatListActions(workspaceListActions ? ['scrollToTop', 'reload'] : ['scrollToTop'])
   const container = containerRef.value
   if (container && props.selectedChatID && !props.messageSearch) {
     persistScrollPosition(props.selectedChatID, container.scrollTop)
@@ -456,6 +691,30 @@ watch(
       </div>
     </div>
 
+    <div
+      v-else-if="pinnedBannerVisible && pinnedMessage"
+      class="pinBar"
+      role="button"
+      tabindex="0"
+      @click="jumpToMessage(String(pinnedMessage.raw.id || ''))"
+      @keydown.enter.prevent="jumpToMessage(String(pinnedMessage.raw.id || ''))"
+    >
+      <v-icon icon="mdi-pin" size="16" class="pinBarIcon" />
+      <div class="pinBarBody">
+        <div class="pinBarTitle">{{ pinnedTitle }}</div>
+        <div class="pinBarPreview">{{ pinnedPreview }}</div>
+      </div>
+      <button
+        v-if="canPinContextMessage !== false"
+        type="button"
+        class="pinBarAction"
+        :title="t('chat.unpin', undefined, 'Unpin')"
+        @click.stop="unpinFromBanner"
+      >
+        <v-icon icon="mdi-pin-off-outline" size="16" />
+      </button>
+    </div>
+
     <section ref="containerRef" class="messageList" @scroll="onScroll">
       <v-alert v-if="errorText" type="error" density="compact" variant="tonal" class="ma-3">{{ errorText }}</v-alert>
 
@@ -469,7 +728,7 @@ watch(
       />
     </div>
 
-    <template v-else-if="messages.length === 0">
+    <template v-else-if="messages.length === 0 && visibleCallCount === 0">
       <div class="emptyState">
         <div class="emptyTitle">{{ selectedChatID ? t('chat.no_messages') : t('chat.select_chat') }}</div>
         <div class="emptySubtitle">{{ selectedChatID ? '' : t('chat.no_messages') }}</div>
@@ -507,6 +766,7 @@ watch(
             @open-discussion="$emit('openDiscussion', $event)"
             @react="$emit('react', $event)"
             @open-context-menu="$emit('openContextMenu', $event)"
+            @open-reaction-picker="$emit('openReactionPicker', $event)"
           />
         </div>
         <div class="discussionStarted">{{ t('chat.discussion_started', undefined, 'Discussion started') }}</div>
@@ -545,6 +805,7 @@ watch(
             @open-discussion="$emit('openDiscussion', $event)"
             @react="$emit('react', $event)"
             @open-context-menu="$emit('openContextMenu', $event)"
+            @open-reaction-picker="$emit('openReactionPicker', $event)"
           />
         </div>
       </div>
@@ -552,49 +813,69 @@ watch(
     </div>
 
     <div v-else class="messageStack">
-      <div
-        v-for="(thread, index) in threadedMessages"
-        :key="thread.post.raw.id"
-        class="messageItem"
-        :data-message-id="thread.post.raw.id"
-        :class="{
-          postThread: Boolean(isPublicChannel) && !(thread.post.raw.reply_to_message_id || '').trim(),
-          highlight: highlightedMessageId === thread.post.raw.id,
-        }"
-      >
-        <MessageBubble
-          :message="thread.post"
-          :mine="thread.post.raw.user_id === currentUserId"
-          :current-user-id="currentUserId"
-          :delivery-status="deliveryStatusByMessage[thread.post.raw.id]?.status"
-          :media-overlay-open="mediaOverlayOpen"
-          :current-user-avatar-src="currentUserAvatarSrc"
-          :avatar-by-user-id="avatarByUserId"
-          :sender-name-by-user-id="senderNameByUserId"
-          :sender-role-by-user-id="senderRoleByUserId"
-          :show-sender-meta="shouldShowSenderHeader(index)"
-          :show-sender-avatar="shouldShowAvatar(index)"
-          :reserve-avatar-space="Boolean(showSenderMeta && thread.post.raw.user_id)"
-          :is-public-channel="Boolean(isPublicChannel)"
-          :comments-enabled="Boolean(commentsEnabled)"
-          :can-comment="Boolean(canComment)"
-          :can-react="canReact"
-          :is-top-level-post="Boolean(isPublicChannel) && !(thread.post.raw.reply_to_message_id || '').trim()"
-          :comment-count="thread.comments.length"
-          :selection-mode="selectionMode"
-          :selected="selectedMessageIds.has(String(thread.post.raw.id || '').trim())"
-          @open-image="$emit('openImage', $event)"
-          @open-video="$emit('openVideo', $event)"
-          @open-user-info="$emit('openUserInfo', $event)"
-          @open-username="$emit('openUsername', $event)"
-          @reply-to-message="$emit('replyToMessage', $event)"
-          @open-discussion="$emit('openDiscussion', $event)"
-          @react="$emit('react', $event)"
-          @open-context-menu="$emit('openContextMenu', $event)"
-          @toggle-select="toggleSelectMessage"
-          @jump-to-message="jumpToMessage"
-        />
-      </div>
+      <template v-for="row in feedRows" :key="row.key">
+        <div v-if="row.kind === 'date'" class="dateRow">
+          <span class="dateChip">{{ row.label }}</span>
+        </div>
+        <div
+          v-else-if="row.kind === 'call'"
+          class="callRow"
+          :class="{ stream: isStreamCall(row.call) }"
+          :title="channelTitle || undefined"
+          v-long-context
+          @contextmenu="openCallContextMenu($event, row.call)"
+        >
+          <span class="callRowIcon">
+            <v-icon :icon="callRowIcon(row.call)" size="16" />
+          </span>
+          <span class="callRowText">{{ callRowText(row.call) }}</span>
+          <span class="callRowTime">{{ callRowTime(row.call) }}</span>
+        </div>
+        <div
+          v-else
+          class="messageItem"
+          :data-message-id="row.thread.post.raw.id"
+          :class="{
+            postThread: Boolean(isPublicChannel) && !(row.thread.post.raw.reply_to_message_id || '').trim(),
+            highlight: highlightedMessageId === row.thread.post.raw.id,
+            selected: selectedMessageIds.has(String(row.thread.post.raw.id || '').trim()),
+          }"
+        >
+          <MessageBubble
+            :message="row.thread.post"
+            :mine="row.thread.post.raw.user_id === currentUserId"
+            :current-user-id="currentUserId"
+            :delivery-status="deliveryStatusByMessage[row.thread.post.raw.id]?.status"
+            :media-overlay-open="mediaOverlayOpen"
+            :current-user-avatar-src="currentUserAvatarSrc"
+            :avatar-by-user-id="avatarByUserId"
+            :sender-name-by-user-id="senderNameByUserId"
+            :sender-role-by-user-id="senderRoleByUserId"
+            :show-sender-meta="shouldShowSenderHeader(row.threadIndex)"
+            :show-sender-avatar="shouldShowAvatar(row.threadIndex)"
+            :reserve-avatar-space="Boolean(showSenderMeta && row.thread.post.raw.user_id)"
+            :is-public-channel="Boolean(isPublicChannel)"
+            :comments-enabled="Boolean(commentsEnabled)"
+            :can-comment="Boolean(canComment)"
+            :can-react="canReact"
+            :is-top-level-post="Boolean(isPublicChannel) && !(row.thread.post.raw.reply_to_message_id || '').trim()"
+            :comment-count="row.thread.comments.length"
+            :selection-mode="selectionMode"
+            :selected="selectedMessageIds.has(String(row.thread.post.raw.id || '').trim())"
+            @open-image="$emit('openImage', $event)"
+            @open-video="$emit('openVideo', $event)"
+            @open-user-info="$emit('openUserInfo', $event)"
+            @open-username="$emit('openUsername', $event)"
+            @reply-to-message="$emit('replyToMessage', $event)"
+            @open-discussion="$emit('openDiscussion', $event)"
+            @react="$emit('react', $event)"
+            @open-context-menu="$emit('openContextMenu', $event)"
+            @open-reaction-picker="$emit('openReactionPicker', $event)"
+            @toggle-select="toggleSelectMessage"
+            @jump-to-message="jumpToMessage"
+          />
+        </div>
+      </template>
     </div>
     </section>
 
@@ -611,6 +892,12 @@ watch(
     :show-delete="canDeleteContextMessage"
     :show-edit="canEditContextMessage"
     :show-react="canReact"
+    :show-save="canSaveContextMessage"
+    :show-pin="Boolean(canPinContextMessage)"
+    :pinned="Boolean(pinnedContextMessage)"
+    :reactions="contextReactions"
+    :reaction-names="contextReactionNames"
+    :reaction-avatars="contextReactionAvatars"
     :views-count="(() => {
       const raw = (contextMenu?.message?.raw || {}) as any
       const candidates = [raw?.views_count, raw?.view_count, raw?.views, raw?.seen_count, raw?.seen]
@@ -621,7 +908,7 @@ watch(
       return 0
     })()"
     @close="$emit('closeContextMenu')"
-    @copy="$emit('copyContextMessage')"
+    @copy="(text) => $emit('copyContextMessage', text)"
     @reply="$emit('replyContextMessage')"
     @forward="$emit('forwardContextMessage')"
     @edit="$emit('editContextMessage')"
@@ -633,6 +920,22 @@ watch(
       }
     "
     @open-picker="$emit('openContextReactionPicker')"
+    @save="$emit('saveContextMessage')"
+    @pin="$emit('pinContextMessage')"
+    @copy-link="$emit('copyLinkContextMessage')"
+    @report="$emit('reportContextMessage')"
+    @select="selectFromContextMenu"
+  />
+
+  <MessageContextMenu
+    :open="Boolean(callContextMenu)"
+    :x="callContextMenu?.x || 0"
+    :y="callContextMenu?.y || 0"
+    mode="call"
+    :show-delete="true"
+    :show-react="false"
+    @close="closeCallContextMenu"
+    @delete="deleteCallFromMenu"
   />
 
   <Teleport to="body">
@@ -660,14 +963,16 @@ watch(
 <style scoped>
 .messageListWrap {
   position: relative;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
 }
 
 .selBar {
-  position: sticky;
-  top: 0;
-  z-index: 5;
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 40;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -715,12 +1020,15 @@ watch(
 
 .messageList {
   position: relative;
-  height: 100%;
+  flex: 1 1 auto;
+  height: auto;
   overflow: auto;
   min-height: 0;
   padding: 0;
   scrollbar-width: thin;
   scrollbar-color: rgba(15, 23, 42, 0.16) transparent;
+  /* The chat wallpaper must stay untouched: no dimming layer, no blur. */
+  background: transparent;
 }
 
 .messageList::-webkit-scrollbar {
@@ -752,14 +1060,16 @@ watch(
 }
 
 .skeletonWrap {
-  padding: 6px 12px 96px;
+  padding: 6px 16px 14px;
 }
 
 .messageStack {
-  padding: 10px 16px 96px;
-  display: grid;
+  padding: 10px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   gap: 10px;
-  align-content: start;
+  min-height: 100%;
 }
 
 .messageItem {
@@ -769,11 +1079,150 @@ watch(
   transform: translateZ(0);
 }
 
+.messageItem.selected {
+  position: relative;
+  z-index: 1;
+}
+
 .messageItem.highlight {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
   border-radius: 14px;
   animation: highlightPulse 1600ms ease-out;
+}
+
+.dateRow {
+  position: sticky;
+  top: 8px;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.dateChip {
+  box-sizing: border-box;
+  width: 170px;
+  padding: 5px 12px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+}
+
+.callRow {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(460px, 100%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 120ms ease;
+}
+
+.callRow:hover {
+  background: var(--surface-soft-hover);
+}
+
+.callRow.stream {
+  border-style: dashed;
+  color: var(--accent);
+}
+
+.callRow.stream .callRowIcon,
+.callRow.stream .callRowTime {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.pinBar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-soft);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.pinBar:hover {
+  background: var(--surface-soft-hover);
+}
+
+.pinBarIcon {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.pinBarBody {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pinBarTitle {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.pinBarPreview {
+  font-size: 13px;
+  color: var(--text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pinBarAction {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.pinBarAction:hover {
+  background: var(--surface-soft-hover);
+  color: var(--text);
+}
+
+.callRowIcon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.callRowText {
+  min-width: 0;
+}
+
+.callRowTime {
+  margin-left: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  opacity: 0.75;
 }
 
 @keyframes highlightPulse {
@@ -783,7 +1232,7 @@ watch(
 }
 
 .discussionStack {
-  padding: 18px 18px 96px;
+  padding: 18px 18px 24px;
   display: grid;
   gap: 16px;
   align-content: start;
@@ -880,7 +1329,7 @@ watch(
 }
 
 .emptyState {
-  padding: 32px 16px 96px;
+  padding: 32px 16px 14px;
   display: grid;
   place-items: center;
   text-align: center;
@@ -901,7 +1350,7 @@ watch(
 .scrollBtn {
   position: absolute;
   right: 24px;
-  bottom: calc(22px + env(safe-area-inset-bottom, 0px) + 72px);
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   z-index: 4;
   width: 48px;
   height: 48px;
@@ -952,11 +1401,21 @@ watch(
   margin-top: 8px;
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--text-muted) 35%, transparent);
+  background: var(--surface-strong);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
   border-radius: 14px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
   overflow: hidden;
+  animation: uiPopIn 140ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 
+@keyframes uiPopIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reactionPickerPopover { animation: none; }
+}
 </style>

@@ -4,12 +4,14 @@ import { useRouter } from 'vue-router'
 import {
   ApiError,
   checkEmailExists,
-  login,
   register,
   saveLocalProfile,
   sendEmailCode,
   verifyEmailCode,
+  type AuthTokens,
+  type AuthUser,
 } from 'combox-api'
+import { notifyLegacyMigration, requestLegacyMigration } from '../../stores/legacyMigration'
 import { useI18n } from '../../i18n/i18n'
 
 type Step = 'email' | 'loginCode' | 'loginPassword' | 'signupCode' | 'signupPassword' | 'username' | 'profile'
@@ -44,6 +46,58 @@ function makeAvatarDataUrl(initials: string, gradient: string): string {
 function parseError(error: unknown, fallback: string): string {
   if (error instanceof ApiError) return error.message || fallback
   return fallback
+}
+
+/**
+ * Raw password login that keeps `migration_required` from the response.
+ * SDK login() persists the same snapshot but returns only {user}, dropping
+ * the flag — and the SDK must not be edited — so AuthFlow performs the single
+ * login POST itself and mirrors login()'s snapshot write exactly (same
+ * endpoint, same body, same storage key, same local-profile sync).
+ */
+const AUTH_SNAPSHOT_KEY = 'combox.auth.v1'
+
+function resolveApiBase(): string {
+  const host = window.location.host.toLowerCase()
+  if (host === 'app.combox.local') return `${window.location.protocol}//api.combox.local/api/private/v1`
+  return '/api/private/v1'
+}
+
+type RawLoginPayload = {
+  message?: string
+  user?: AuthUser
+  tokens?: AuthTokens
+  migration_required?: boolean
+  code?: string
+  details?: Record<string, string>
+}
+
+async function loginWithMigration(loginValue: string, password: string, loginKey: string): Promise<{ user: AuthUser; migrationRequired: boolean }> {
+  const response = await fetch(`${resolveApiBase()}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ login: loginValue, password, login_key: loginKey }),
+  })
+  let payload: RawLoginPayload | null = null
+  try {
+    payload = (await response.json()) as RawLoginPayload
+  } catch {
+    payload = null
+  }
+  if (!response.ok || !payload?.user || !payload?.tokens) {
+    throw new ApiError(payload?.code || 'login_failed', payload?.message || 'Login failed', payload?.details)
+  }
+  window.localStorage.setItem(AUTH_SNAPSHOT_KEY, JSON.stringify({ user: payload.user, tokens: payload.tokens }))
+  if (payload.user.first_name && payload.user.avatar_gradient) {
+    saveLocalProfile({
+      firstName: payload.user.first_name,
+      lastName: payload.user.last_name || '',
+      birthDate: payload.user.birth_date,
+      avatarDataUrl: payload.user.avatar_data_url || '',
+      gradient: payload.user.avatar_gradient,
+    })
+  }
+  return { user: payload.user, migrationRequired: payload.migration_required === true }
 }
 
 const router = useRouter()
@@ -118,9 +172,17 @@ async function continueLogin() {
   loading.value = true
   errorText.value = ''
   try {
-    await login(email.value.trim().toLowerCase(), loginPassword.value, loginKey.value)
+    const result = await loginWithMigration(email.value.trim().toLowerCase(), loginPassword.value, loginKey.value)
+    if (result.migrationRequired) {
+      // Legacy password account: the stored token is migr-limited, so open
+      // the forced email-binding modal instead of letting every request 403.
+      requestLegacyMigration()
+    }
     await router.push('/')
   } catch (error) {
+    // A migr-limited session retrying login answers 403
+    // EMAIL_BINDING_REQUIRED: open the modal, not a dead-end error.
+    if (notifyLegacyMigration(error)) return
     errorText.value = parseError(error, t('auth.error_password_invalid'))
   } finally {
     loading.value = false
@@ -252,6 +314,16 @@ async function resendCode() {
   }
 }
 
+function handleFormSubmit() {
+  if (step.value === 'email') return continueFromEmail()
+  if (step.value === 'loginPassword') return continueLogin()
+  if (step.value === 'loginCode') return continueLoginCode()
+  if (step.value === 'signupCode') return continueCode()
+  if (step.value === 'signupPassword') return continuePassword()
+  if (step.value === 'username') return continueUsername()
+  if (step.value === 'profile') return finishSignup()
+}
+
 function back() {
   errorText.value = ''
   if (step.value === 'loginCode' || step.value === 'signupCode' || step.value === 'signupPassword') step.value = 'email'
@@ -263,6 +335,7 @@ function back() {
 function onAvatarSelect(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
+  input.value = ''
   if (!file) return
   const reader = new FileReader()
   reader.onload = () => {
@@ -276,13 +349,13 @@ function onAvatarSelect(event: Event) {
   <v-container class="pa-0 fill-width">
     <v-row class="ma-0">
       <v-col cols="12" class="pa-0">
-        <div class="d-flex flex-column ga-4">
+        <form class="d-flex flex-column ga-4" @submit.prevent="handleFormSubmit">
           <div class="d-flex flex-column align-center ga-1 mb-1">
             <h1 class="auth-title">{{ stepMeta.title }}</h1>
             <p class="auth-subtitle">{{ stepMeta.subtitle }}</p>
           </div>
 
-          <v-btn v-if="step !== 'email'" variant="text" class="align-self-start auth-back-btn" @click="back">{{ t('auth.back') }}</v-btn>
+          <v-btn v-if="step !== 'email'" type="button" variant="text" class="align-self-start auth-back-btn" @click="back">{{ t('auth.back') }}</v-btn>
 
           <v-alert v-if="errorText" type="error" density="compact" variant="tonal">{{ errorText }}</v-alert>
 
@@ -299,9 +372,8 @@ function onAvatarSelect(event: Event) {
               autocomplete="email"
               name="email"
               class="auth-field"
-              @keydown.enter="continueFromEmail"
             />
-            <v-btn block color="primary" size="large" class="auth-primary-btn" :disabled="loading" @click="continueFromEmail">
+            <v-btn block color="primary" size="large" class="auth-primary-btn" type="submit" :disabled="loading">
               <v-progress-circular v-if="loading" indeterminate size="18" width="2" color="currentColor" />
               <template v-else>{{ submitLabel }}</template>
             </v-btn>
@@ -315,10 +387,11 @@ function onAvatarSelect(event: Event) {
               variant="outlined"
               hide-details
               autofocus
+              autocomplete="current-password"
+              name="password"
               class="auth-field"
-              @keydown.enter="continueLogin"
             />
-            <v-btn block color="primary" size="large" class="auth-primary-btn" :disabled="loading" @click="continueLogin">
+            <v-btn block color="primary" size="large" class="auth-primary-btn" type="submit" :disabled="loading">
               <v-progress-circular v-if="loading" indeterminate size="18" width="2" color="currentColor" />
               <template v-else>{{ submitLabel }}</template>
             </v-btn>
@@ -337,13 +410,12 @@ function onAvatarSelect(event: Event) {
               name="one-time-code"
               class="auth-field"
               @update:model-value="handleEmailCodeInput"
-              @keydown.enter="continueLoginCode"
             />
-            <v-btn block color="primary" size="large" class="auth-primary-btn" :disabled="loading" @click="continueLoginCode">
+            <v-btn block color="primary" size="large" class="auth-primary-btn" type="submit" :disabled="loading">
               <v-progress-circular v-if="loading" indeterminate size="18" width="2" color="currentColor" />
               <template v-else>{{ submitLabel }}</template>
             </v-btn>
-            <v-btn block variant="text" class="auth-secondary-btn" :disabled="loading" @click="resendCode">{{ t('auth.resend_code') }}</v-btn>
+            <v-btn block type="button" variant="text" class="auth-secondary-btn" :disabled="loading" @click="resendCode">{{ t('auth.resend_code') }}</v-btn>
           </template>
 
           <template v-if="step === 'signupCode'">
@@ -359,16 +431,15 @@ function onAvatarSelect(event: Event) {
               name="one-time-code"
               class="auth-field"
               @update:model-value="handleEmailCodeInput"
-              @keydown.enter="continueCode"
             />
-            <v-btn block color="primary" size="large" class="auth-primary-btn" :disabled="loading" @click="continueCode">{{ submitLabel }}</v-btn>
-            <v-btn block variant="text" class="auth-secondary-btn" :disabled="loading" @click="resendCode">{{ t('auth.resend_code') }}</v-btn>
+            <v-btn block color="primary" size="large" class="auth-primary-btn" type="submit" :disabled="loading">{{ submitLabel }}</v-btn>
+            <v-btn block type="button" variant="text" class="auth-secondary-btn" :disabled="loading" @click="resendCode">{{ t('auth.resend_code') }}</v-btn>
           </template>
 
           <template v-if="step === 'signupPassword'">
-            <v-text-field v-model="password" :label="t('auth.password')" type="password" variant="outlined" hide-details autofocus class="auth-field" />
-            <v-text-field v-model="confirmPassword" :label="t('auth.confirm_password')" type="password" variant="outlined" hide-details class="auth-field" @keydown.enter="continuePassword" />
-            <v-btn block color="primary" size="large" class="auth-primary-btn" @click="continuePassword">{{ submitLabel }}</v-btn>
+            <v-text-field v-model="password" :label="t('auth.password')" type="password" variant="outlined" hide-details autofocus autocomplete="new-password" name="new-password" class="auth-field" />
+            <v-text-field v-model="confirmPassword" :label="t('auth.confirm_password')" type="password" variant="outlined" hide-details autocomplete="new-password" name="confirm-password" class="auth-field" />
+            <v-btn block color="primary" size="large" class="auth-primary-btn" type="submit" :disabled="loading">{{ submitLabel }}</v-btn>
           </template>
 
           <template v-if="step === 'username'">
@@ -379,11 +450,12 @@ function onAvatarSelect(event: Event) {
               :hint="t('auth.username_hint')"
               persistent-hint
               autofocus
+              autocomplete="username"
+              name="username"
               class="auth-field"
               @update:model-value="handleUsernameInput"
-              @keydown.enter="continueUsername"
             />
-            <v-btn block color="primary" size="large" class="auth-primary-btn" @click="continueUsername">{{ submitLabel }}</v-btn>
+            <v-btn block color="primary" size="large" class="auth-primary-btn" type="submit" :disabled="loading">{{ submitLabel }}</v-btn>
           </template>
 
           <template v-if="step === 'profile'">
@@ -392,20 +464,22 @@ function onAvatarSelect(event: Event) {
                 <img v-if="avatarDataUrl" :src="avatarDataUrl" alt="avatar" />
                 <span v-else>{{ previewInitials }}</span>
               </v-avatar>
-              <v-btn variant="outlined" prepend-icon="mdi-cloud-upload-outline" class="auth-upload-btn">
-                {{ t('auth.upload_avatar') }}
-                <input hidden type="file" accept="image/*" @change="onAvatarSelect" />
-              </v-btn>
+              <label class="authUploadLabel">
+                <input type="file" accept="image/*" class="avatarFileInput" @change="onAvatarSelect" />
+                <v-btn type="button" variant="outlined" prepend-icon="mdi-cloud-upload-outline" class="auth-upload-btn">
+                  {{ t('auth.upload_avatar') }}
+                </v-btn>
+              </label>
             </div>
             <v-text-field v-model="firstName" :label="t('auth.first_name')" variant="outlined" hide-details autofocus class="auth-field" />
             <v-text-field v-model="lastName" :label="t('auth.last_name_optional')" variant="outlined" hide-details class="auth-field" />
             <v-text-field v-model="birthDate" :label="t('auth.birth_date_optional')" placeholder="YYYY-MM-DD" variant="outlined" hide-details class="auth-field" />
-            <v-btn block color="primary" size="large" class="auth-primary-btn" :disabled="loading" @click="finishSignup">
+            <v-btn block color="primary" size="large" class="auth-primary-btn" type="submit" :disabled="loading">
               <v-progress-circular v-if="loading" indeterminate size="18" width="2" color="currentColor" />
               <template v-else>{{ submitLabel }}</template>
             </v-btn>
           </template>
-        </div>
+        </form>
       </v-col>
     </v-row>
   </v-container>
@@ -461,6 +535,25 @@ function onAvatarSelect(event: Event) {
 .auth-upload-btn {
   border-radius: 0;
   text-transform: none;
+}
+
+.authUploadLabel {
+  position: relative;
+  display: inline-flex;
+}
+
+.avatarFileInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.authUploadLabel:hover .auth-upload-btn {
+  background-color: rgba(148, 163, 184, 0.12);
 }
 
 .auth-avatar {

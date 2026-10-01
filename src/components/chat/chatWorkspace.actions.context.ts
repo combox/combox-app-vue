@@ -58,7 +58,16 @@ export function createContextActions(deps: CreateContextActionsInput) {
     deps.contextMenu.value = null
   }
 
-  function openContextReactionPicker() {
+  function openContextReactionPicker(anchor?: { x: number; y: number; messageId?: string }) {
+    if (anchor) {
+      deps.contextReactionAnchor.value = {
+        x: anchor.x,
+        y: anchor.y,
+        messageId: anchor.messageId || deps.contextMenu.value?.message.raw.id || '',
+      }
+      deps.contextMenu.value = null
+      return
+    }
     if (!deps.contextMenu.value) return
     deps.contextReactionAnchor.value = {
       x: deps.contextMenu.value.x,
@@ -79,8 +88,9 @@ export function createContextActions(deps: CreateContextActionsInput) {
     deps.contextReactionAnchor.value = null
   }
 
-  function copyContextMessage() {
-    const text = deps.contextMenu.value?.message.text || ''
+  function copyContextMessage(selection?: string) {
+    const selected = typeof selection === 'string' ? selection : ''
+    const text = selected.trim() ? selected : (deps.contextMenu.value?.message.text || '')
     if (text) void navigator.clipboard.writeText(text)
     deps.contextMenu.value = null
   }

@@ -10,6 +10,10 @@ export type ResolvedAttachment = {
   width: number
   height: number
   durationMs: number
+  sizeBytes?: number
+  waveform?: number[]
+  round?: boolean
+  voice?: boolean
 }
 
 export type ViewMessage = {

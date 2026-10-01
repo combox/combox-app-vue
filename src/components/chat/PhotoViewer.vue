@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 
 const props = defineProps<{
   open: boolean
@@ -24,11 +24,6 @@ const offset = ref({ x: 0, y: 0 })
 const dragging = ref(false)
 const dragState = ref({ startX: 0, startY: 0, originX: 0, originY: 0 })
 const openedAt = ref(0)
-
-const cursorStyle = computed(() => {
-  if (scale.value <= 1) return 'zoom-in'
-  return dragging.value ? 'grabbing' : 'grab'
-})
 
 function resetView() {
   scale.value = 1
@@ -177,7 +172,7 @@ onBeforeUnmount(() => {
           draggable="false"
           @mousedown.prevent="handleMouseDown"
           @click.stop
-          :style="{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale}) rotate(${rotation}deg)`, cursor: cursorStyle }"
+          :style="{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale}) rotate(${rotation}deg)` }"
         />
       </div>
     </div>
@@ -188,8 +183,9 @@ onBeforeUnmount(() => {
 .pvRoot {
   height: 100%;
   width: 100%;
-  background: rgba(0, 0, 0, 0.9);
+  background: var(--viewer-scrim);
   position: relative;
+  cursor: default;
 }
 
 .pvStage {
@@ -197,12 +193,14 @@ onBeforeUnmount(() => {
   width: 100%;
   display: grid;
   place-items: center;
+  cursor: default;
 }
 
 .pvImage {
   max-width: 95vw;
   max-height: 92vh;
   object-fit: contain;
+  cursor: default;
 }
 
 .pvToolbar {

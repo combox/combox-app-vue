@@ -74,9 +74,11 @@ const REACTION_EMOJIS = [
 
 <style scoped>
 .rpRoot {
-  width: 320px;
-  max-width: min(320px, calc(100vw - 16px));
+  width: 100%;
+  max-width: 320px;
+  margin: 0 auto;
   padding: 10px;
+  box-sizing: border-box;
   background: transparent;
 }
 
@@ -84,22 +86,42 @@ const REACTION_EMOJIS = [
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 4px;
+  justify-content: center;
+  justify-items: center;
+  align-items: center;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 .rpEmoji {
   width: 100%;
   aspect-ratio: 1;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  justify-self: center;
   border: 0;
   border-radius: 10px;
   background: transparent;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', 'NotoColorEmoji',
+    sans-serif;
   font-size: 23px;
   line-height: 1;
   display: grid;
   place-items: center;
   cursor: pointer;
+  outline: none;
+  box-shadow: none;
 }
 
 .rpEmoji:hover {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface-strong));
+}
+
+.rpEmoji:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: 1px;
 }
 </style>

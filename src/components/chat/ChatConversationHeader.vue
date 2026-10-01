@@ -1,14 +1,27 @@
 <script setup lang="ts">
 import { useI18n } from '../../i18n/i18n'
-defineProps<{
+import { openAvatarPreview } from '../../utils/avatarViewer'
+import { avatarColorFor } from '../../utils/avatarColor'
+import TypingIndicator from './TypingIndicator.vue'
+const props = defineProps<{
   title: string
   subtitle: string
+  typingLabel?: string
   avatarText: string
   avatarSrc?: string
   searchOpen: boolean
   searchValue: string
   showBack?: boolean
   backAriaLabel?: string
+  streamMode?: boolean
+  /**
+   * Owner of the avatar, so the fullscreen viewer can lazy-load the photo
+   * history. Both stay optional on purpose: the header is rendered by
+   * ChatWorkspace, which does not pass them yet, so the viewer keeps showing
+   * the single photo until that wiring lands.
+   */
+  ownerId?: string
+  ownerKind?: 'user' | 'chat'
 }>()
 
 const emit = defineEmits<{
@@ -18,6 +31,7 @@ const emit = defineEmits<{
   updateSearch: [value: string]
   openMenu: [anchor: { top: number; left: number; width: number; height: number }]
   back: []
+  startCall: []
 }>()
 const { t } = useI18n()
 
@@ -26,6 +40,14 @@ function openMenu(event: MouseEvent) {
   if (!target) return
   const rect = target.getBoundingClientRect()
   emit('openMenu', { top: rect.bottom, left: rect.left, width: rect.width, height: rect.height })
+}
+
+function previewAvatar(event: MouseEvent) {
+  event.stopPropagation()
+  openAvatarPreview(event.currentTarget?.getAttribute('data-src') || '', props.title, {
+    ownerId: props.ownerId,
+    ownerKind: props.ownerKind,
+  })
 }
 </script>
 
@@ -60,22 +82,42 @@ function openMenu(event: MouseEvent) {
           @keydown.enter.prevent="emit('openInfo')"
           @keydown.space.prevent="emit('openInfo')"
         >
-          <div v-if="avatarSrc" class="convAvatarWrap">
+          <button
+            v-if="avatarSrc"
+            type="button"
+            class="convAvatarWrap convAvatarBtn"
+            :data-src="avatarSrc"
+            :aria-label="t('chat.preview_avatar', undefined, 'View avatar')"
+            @click="previewAvatar"
+          >
             <img class="convAvatarImg" :src="avatarSrc" alt="" />
-          </div>
-          <div v-else class="convAvatarFallback">{{ avatarText }}</div>
+          </button>
+          <div v-else class="convAvatarFallback" :style="{ background: avatarColorFor(title) }">{{ avatarText }}</div>
           <div class="convMeta">
             <div class="convTitle">{{ title }}</div>
-            <div class="convSubtitle">{{ subtitle }}</div>
+            <div v-if="typingLabel" class="convSubtitle convTyping">
+              <TypingIndicator />
+              <span>{{ typingLabel }}</span>
+            </div>
+            <div v-else class="convSubtitle">{{ subtitle }}</div>
           </div>
         </div>
       </template>
 
       <div class="convActions">
-        <button type="button" class="convActionBtn" :aria-label="t('chat.search')" @click="emit('openSearch')">
+        <button
+          type="button"
+          class="convActionBtn"
+          :aria-label="streamMode ? t('call.start_stream', undefined, 'Start stream') : t('call.start_audio', undefined, 'Start audio call')"
+          :title="streamMode ? t('call.start_stream', undefined, 'Start stream') : t('call.start_audio', undefined, 'Start audio call')"
+          @click="emit('startCall')"
+        >
+          <v-icon :icon="streamMode ? 'mdi-broadcast' : 'mdi-phone'" size="18" />
+        </button>
+        <button type="button" class="convActionBtn" :aria-label="t('chat.search')" :title="t('chat.search')" @click="emit('openSearch')">
           <v-icon icon="mdi-magnify" size="18" />
         </button>
-        <button type="button" class="convActionBtn" :aria-label="t('chat.menu')" @click="openMenu">
+        <button type="button" class="convActionBtn" :aria-label="t('chat.menu')" :title="t('chat.menu')" @click="openMenu">
           <v-icon icon="mdi-dots-vertical" size="18" />
         </button>
       </div>
@@ -108,6 +150,7 @@ function openMenu(event: MouseEvent) {
   align-items: center;
   gap: 12px;
   min-width: 0;
+  flex: 1 1 auto;
   cursor: pointer;
 }
 
@@ -117,6 +160,7 @@ function openMenu(event: MouseEvent) {
 
 .convMeta {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .convAvatarWrap,
@@ -128,16 +172,37 @@ function openMenu(event: MouseEvent) {
   flex: 0 0 auto;
 }
 
+.convAvatarBtn {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
 .convTitle {
   font-size: 18px;
   font-weight: 800;
   line-height: 1.1;
   color: var(--text);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .convSubtitle {
   font-size: 12px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.convTyping {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
 }
 
 .convAvatarImg {
@@ -161,6 +226,8 @@ function openMenu(event: MouseEvent) {
   display: flex;
   align-items: center;
   gap: 2px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .convActionBtn {
@@ -204,5 +271,19 @@ function openMenu(event: MouseEvent) {
   background: transparent;
   font-size: 16px;
   color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .convInner {
+    padding: 8px;
+    gap: 6px;
+  }
+  .convTitle {
+    font-size: 16px;
+  }
+  .convActionBtn {
+    width: 34px;
+    height: 34px;
+  }
 }
 </style>

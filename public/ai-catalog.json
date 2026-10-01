@@ -1,0 +1,1 @@
+{"description": "ComBox — fast, private messenger: chats, channels, voice rooms, calls and file sharing in the browser.", "name": "ComBox", "routes": [{"path": "/", "title": "App"}, {"path": "/auth", "title": "Sign in / sign up"}, {"path": "/settings", "title": "Settings"}], "url": "/", "version": "0.1.1"}

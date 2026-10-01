@@ -1,12 +1,22 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { getAttachmentDownloadURL } from 'combox-api'
-import type { AuthUser, ChatInviteLink, ChatItem, ChatMemberProfile, LocalProfile } from 'combox-api'
+import { getAttachmentDownloadURL, getUserByID, searchDirectory } from 'combox-api'
+import type { AuthUser, ChatInviteLink, ChatItem, ChatMemberProfile, LocalProfile, SavedTrack, SearchUserResult } from 'combox-api'
 import { normalizeAvatarSrc } from './chatUtils'
+import { openAvatarPreview } from '../../utils/avatarViewer'
+import { avatarColorFor } from '../../utils/avatarColor'
+import { useChatPlayback, formatPlayerTime } from '../../composables/useChatPlayback'
+import {
+  getPlaylistAttachmentId,
+  isLocalPlaylistUrl,
+  isPermanentAttachmentError,
+  resolvePlaylistTrackUrl,
+} from '../../utils/playlistAttachment'
 import type { ViewMessage } from './chatTypes'
 const GroupEditPanel = defineAsyncComponent(() => import('./GroupEditPanel.vue'))
 import ChannelPanel from './PublicChannelPanel.vue'
 import { useI18n } from '../../i18n/i18n'
+import { useToast } from '../../composables/useToast'
 import { yieldToMain } from './yieldToMain'
 import { getSharedMediaLazyQueue } from './mediaLazyQueue'
 import { preloadAndDecodeImage } from './mediaPreload'
@@ -50,12 +60,20 @@ const emit = defineEmits<{
   toggleMuteChat: []
   openImage: [src: string]
   openVideo: [payload: { attachmentID: string; src: string; poster?: string; filename?: string }]
+  chatUpdated: [chat: ChatItem]
 }>()
 
 const { t } = useI18n()
+const toast = useToast()
 
-const activeTab = ref<'media' | 'files' | 'links' | 'members'>(props.selectedChat?.is_direct ? 'media' : 'members')
+type InfoTab = 'media' | 'files' | 'links' | 'members' | 'manage'
+
+const activeTab = ref<InfoTab>(props.selectedChat?.is_direct ? 'media' : 'members')
 const manageMembers = ref(false)
+const manageQuery = ref('')
+const manageResults = ref<SearchUserResult[]>([])
+const manageBusy = ref(false)
+let manageSearchTimer: number | null = null
 const rootRef = ref<HTMLElement | null>(null)
 const bottomSentinelRef = ref<HTMLElement | null>(null)
 const panelReady = ref(false)
@@ -81,14 +99,169 @@ function onInfoScroll() {
 const activeProfile = computed(() => props.focusedUserProfile || props.peerProfile)
 const isUserInfoMode = computed(() => Boolean(props.focusedUserProfile?.id))
 const isGroupMode = computed(() => Boolean(props.selectedChat && !props.selectedChat.is_direct && !isUserInfoMode.value))
+const infoTitle = computed(() => {
+  if (isUserInfoMode.value) return t('chat.contact_info', undefined, 'Contact info')
+  if (isGroupMode.value) return t('chat.group_info')
+  return t('chat.chat_info', undefined, 'Chat info')
+})
+
+const { state: playback, activate, toggle: togglePlayback } = useChatPlayback()
+
+const profileUserID = computed(() => {
+  if (isUserInfoMode.value) return (props.focusedUserProfile?.id || '').trim()
+  if (props.selectedChat?.is_direct) return (props.directPeerId || '').trim()
+  return ''
+})
+
+const profilePlaylistPublic = ref(true)
+const profilePlaylistResolved = ref(false)
+
+const showProfilePlaylist = computed(() => {
+  if (!profileUserID.value) return false
+  if (!(isUserInfoMode.value || Boolean(props.selectedChat?.is_direct))) return false
+  if (!profilePlaylistResolved.value) return true
+  return profilePlaylistPublic.value
+})
+
+const profileTracks = ref<SavedTrack[]>([])
+const profileTracksLoading = ref(false)
+let profileTracksToken = 0
+
+function sanitizeTracks(list: unknown): SavedTrack[] {
+  if (!Array.isArray(list)) return []
+  return list.filter(
+    (track) => track && typeof track === 'object' && typeof track.id === 'string' && typeof track.title === 'string',
+  )
+}
+
+async function loadProfileTracks() {
+  const id = profileUserID.value
+  profilePlaylistResolved.value = false
+  profilePlaylistPublic.value = true
+  if (!props.open || !id) {
+    profileTracksToken += 1
+    profileTracks.value = []
+    profileTracksLoading.value = false
+    profilePlaylistResolved.value = true
+    return
+  }
+
+  const token = ++profileTracksToken
+  const ownID = (props.currentUser?.id || '').trim()
+  if (ownID && id === ownID) {
+    profileTracks.value = sanitizeTracks(props.currentUser?.saved_tracks)
+    profileTracksLoading.value = false
+    profilePlaylistPublic.value = true
+    profilePlaylistResolved.value = true
+    return
+  }
+
+  profileTracksLoading.value = true
+  try {
+    const user = await getUserByID(id)
+    if (token !== profileTracksToken) return
+    profileTracks.value = sanitizeTracks(user.saved_tracks)
+    profilePlaylistPublic.value = user.playlist_is_public !== false
+    profilePlaylistResolved.value = true
+  } catch {
+    if (token !== profileTracksToken) return
+    profileTracks.value = []
+    profilePlaylistResolved.value = true
+  } finally {
+    if (token === profileTracksToken) profileTracksLoading.value = false
+  }
+}
+
+function isProfileTrackCurrent(track: SavedTrack): boolean {
+  return playback.currentId === track.id
+}
+
+function isProfileTrackPlaying(track: SavedTrack): boolean {
+  return playback.currentId === track.id && playback.playing
+}
+
+const profileUnavailableIds = ref<Record<string, true>>({})
+
+function isProfileTrackUnavailable(track: SavedTrack): boolean {
+  return Boolean(profileUnavailableIds.value[track.id])
+}
+
+async function playProfileTrack(track: SavedTrack) {
+  if (playback.currentId === track.id) {
+    togglePlayback()
+    return
+  }
+  if (isProfileTrackUnavailable(track)) {
+    toast.error(t('player.track_unavailable', undefined, 'This track is no longer available and cannot be played'))
+    return
+  }
+  const storedUrl = (track.fileUrl || '').trim()
+  if (isLocalPlaylistUrl(storedUrl) && !getPlaylistAttachmentId(track)) {
+    toast.error(t('player.no_url', undefined, 'No playable source for this track'))
+    return
+  }
+  try {
+    const resolved = await resolvePlaylistTrackUrl(track)
+    const next = { ...profileUnavailableIds.value }
+    if (next[track.id]) {
+      delete next[track.id]
+      profileUnavailableIds.value = next
+    }
+    await activate({
+      id: track.id,
+      url: resolved.url,
+      title: track.title,
+      artist: (track.artist || '').trim(),
+      durationMs: (track.duration || 0) * 1000,
+      poster: '',
+    })
+  } catch (error) {
+    if (isPermanentAttachmentError(error) || (error instanceof Error && (error.message === 'no_source' || error.message === 'attachment_not_found'))) {
+      profileUnavailableIds.value = { ...profileUnavailableIds.value, [track.id]: true }
+      toast.error(t('player.track_unavailable', undefined, 'This track is no longer available and cannot be played'))
+    } else {
+      toast.error(t('player.play_failed', undefined, 'Could not play this track'))
+    }
+  }
+}
+
+watch(
+  () => [props.open, profileUserID.value] as const,
+  () => {
+    void loadProfileTracks()
+  },
+  { immediate: true },
+)
 
 watch(
   () => props.selectedChat?.id,
   () => {
     activeTab.value = props.selectedChat?.is_direct ? 'media' : 'members'
     manageMembers.value = false
+    resetManageSearch()
   },
 )
+
+watch(manageQuery, (query) => {
+  if (manageSearchTimer) window.clearTimeout(manageSearchTimer)
+  const clean = query.trim()
+  if (clean.length < 2) {
+    manageResults.value = []
+    manageBusy.value = false
+    return
+  }
+  manageBusy.value = true
+  manageSearchTimer = window.setTimeout(async () => {
+    try {
+      const found = await searchDirectory({ q: clean, scope: 'users', limit: 20 })
+      manageResults.value = Array.isArray(found.users) ? found.users : []
+    } catch {
+      manageResults.value = []
+    } finally {
+      manageBusy.value = false
+    }
+  }, 220)
+})
 
 watch(
   () => props.open,
@@ -97,6 +270,9 @@ watch(
       window.clearTimeout(panelReadyTimer)
       panelReadyTimer = null
     }
+
+    manageMembers.value = false
+    resetManageSearch()
 
     if (!open) {
       panelReady.value = false
@@ -140,6 +316,18 @@ const displayName = computed(() => {
   return peerName || (props.selectedChat?.title || t('chat.title'))
 })
 const avatarSrc = computed(() => normalizeAvatarSrc(activeProfile.value?.avatar_data_url || props.selectedChat?.avatar_data_url || ''))
+
+// The fullscreen gallery lazy-loads the history of whatever the hero shows:
+// a group / channel owns its own archive, while a direct chat and a focused
+// profile show a person's archive.
+const heroGalleryOwner = computed(() => {
+  if (isGroupMode.value) {
+    const chatID = (props.selectedChat?.id || '').trim()
+    return chatID ? { ownerId: chatID, ownerKind: 'chat' as const } : undefined
+  }
+  const userID = profileUserID.value
+  return userID ? { ownerId: userID, ownerKind: 'user' as const } : undefined
+})
 const usernameLine = computed(() => {
   const peerRaw = (activeProfile.value || {}) as Record<string, unknown>
   const nested = ((peerRaw.profile as Record<string, unknown> | undefined) || {}) as Record<string, unknown>
@@ -307,17 +495,17 @@ watch(
   { immediate: true },
 )
 
-function growVisible(tab: 'members' | 'media' | 'files' | 'links') {
+function growVisible(tab: InfoTab) {
   const step = 24
-  if (tab === 'members') visibleMemberCount.value = Math.min(memberItems.value.length, visibleMemberCount.value + step)
+  if (tab === 'members' || tab === 'manage') visibleMemberCount.value = Math.min(memberItems.value.length, visibleMemberCount.value + step)
   if (tab === 'media') visibleMediaCount.value = Math.min(mediaItems.value.length, visibleMediaCount.value + step)
   if (tab === 'files') visibleFileCount.value = Math.min(fileItems.value.length, visibleFileCount.value + step)
   if (tab === 'links') visibleLinkCount.value = Math.min(linkItems.value.length, visibleLinkCount.value + step)
 }
 
-function resetVisible(tab: 'members' | 'media' | 'files' | 'links') {
+function resetVisible(tab: InfoTab) {
   const step = 24
-  if (tab === 'members') visibleMemberCount.value = Math.min(step, memberItems.value.length)
+  if (tab === 'members' || tab === 'manage') visibleMemberCount.value = Math.min(step, memberItems.value.length)
   if (tab === 'media') visibleMediaCount.value = Math.min(step, mediaItems.value.length)
   if (tab === 'files') visibleFileCount.value = Math.min(step, fileItems.value.length)
   if (tab === 'links') visibleLinkCount.value = Math.min(step, linkItems.value.length)
@@ -354,6 +542,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (panelReadyTimer) window.clearTimeout(panelReadyTimer)
   panelReadyTimer = null
+  if (manageSearchTimer) window.clearTimeout(manageSearchTimer)
+  manageSearchTimer = null
   if (moreIO) moreIO.disconnect()
   moreIO = null
   if (infoScrollEl) infoScrollEl.removeEventListener('scroll', onInfoScroll)
@@ -461,7 +651,8 @@ const currentGroupRole = computed(() => {
   const currentUserID = (props.currentUser?.id || '').trim()
   if (!currentUserID) return ''
   const ownMember = props.chatMembers.find((item) => item.user_id === currentUserID)
-  return (ownMember?.role || '').trim().toLowerCase()
+  const memberRole = (ownMember?.role || '').trim().toLowerCase()
+  return memberRole || ((props.selectedChat?.viewer_role || '').trim().toLowerCase())
 })
 const canManageGroup = computed(() => currentGroupRole.value === 'owner' || currentGroupRole.value === 'admin' || currentGroupRole.value === 'moderator')
 const isStandaloneChannel = computed(() => (props.selectedChat?.kind || '').trim() === 'standalone_channel')
@@ -469,11 +660,99 @@ const canViewChannelMembers = computed(() => {
   if (!isStandaloneChannel.value) return true
   return currentGroupRole.value === 'owner' || currentGroupRole.value === 'admin'
 })
-const publicSubscriberCount = computed(() => Number(props.selectedChat?.subscriber_count || props.chatMembers.length || 0))
-const isSubscribedToChannel = computed(() => {
+const basePublicSubscriberCount = computed(() => Number(props.selectedChat?.subscriber_count || props.chatMembers.length || 0))
+// L6: rows migrated by the boxchat ETL may carry role 'member', which is not
+// a valid standalone_channel role but still means "subscribed" — the backend
+// normalizes it to 'subscriber' on subscribe, the client must already treat
+// it as subscribed so the button reads Unsubscribe.
+const serverSubscribedToChannel = computed(() => {
   if (!isStandaloneChannel.value) return false
-  return ['owner', 'admin', 'subscriber'].includes(currentGroupRole.value)
+  return ['owner', 'admin', 'subscriber', 'member'].includes(currentGroupRole.value)
 })
+// Optimistic toggle for the inline subscribe button below (the ChannelPanel
+// above handles its own tile): flip instantly, the parent's server patch
+// confirms it through props, otherwise roll back with a toast.
+const channelSubscribePending = ref<boolean | null>(null)
+const channelSubscribeDelta = ref(0)
+let channelSubscribeTimer: number | null = null
+const isSubscribedToChannel = computed(() => channelSubscribePending.value ?? serverSubscribedToChannel.value)
+const publicSubscriberCount = computed(() => Math.max(0, basePublicSubscriberCount.value + channelSubscribeDelta.value))
+function clearChannelSubscribeOptimism() {
+  channelSubscribePending.value = null
+  channelSubscribeDelta.value = 0
+  if (channelSubscribeTimer !== null) {
+    window.clearTimeout(channelSubscribeTimer)
+    channelSubscribeTimer = null
+  }
+}
+watch([serverSubscribedToChannel, basePublicSubscriberCount], ([server]) => {
+  if (channelSubscribePending.value !== null && server === channelSubscribePending.value) clearChannelSubscribeOptimism()
+})
+function onToggleChannelSubscribe() {
+  if (channelSubscribePending.value !== null) return
+  const next = !isSubscribedToChannel.value
+  channelSubscribePending.value = next
+  channelSubscribeDelta.value = next ? 1 : -1
+  emit(next ? 'subscribeChannel' : 'unsubscribeChannel')
+  channelSubscribeTimer = window.setTimeout(() => {
+    if (channelSubscribePending.value === null) return
+    const failed = channelSubscribePending.value
+    clearChannelSubscribeOptimism()
+    toast.error(failed
+      ? t('chat.subscribe_failed', undefined, 'Could not subscribe')
+      : t('chat.unsubscribe_failed', undefined, 'Could not unsubscribe'))
+  }, 8000)
+}
+
+watch(
+  () => [props.open, activeTab.value, isGroupMode.value, canManageGroup.value] as const,
+  ([open, tab, group, canManage]) => {
+    if (open && tab === 'manage' && (!group || !canManage)) activeTab.value = 'members'
+  },
+  { immediate: true },
+)
+
+const manageCandidates = computed(() => {
+  const existing = new Set(props.chatMembers.map((item) => item.user_id))
+  const ownID = (props.currentUser?.id || '').trim()
+  return manageResults.value.filter((user) => !existing.has(user.id) && user.id !== ownID)
+})
+
+function resultAvatarSrc(user: SearchUserResult): string {
+  return normalizeAvatarSrc(user.avatar_data_url || '')
+}
+
+function canManageMember(item: { id: string; role: string }): boolean {
+  if (!canManageGroup.value) return false
+  if (item.role === 'owner') return false
+  const ownID = (props.currentUser?.id || '').trim()
+  return Boolean(ownID) && item.id !== ownID
+}
+
+function memberRoleActionLabel(role: string): string {
+  return role === 'admin'
+    ? t('chat.demote_admin', undefined, 'Make member')
+    : t('chat.promote_admin', undefined, 'Make admin')
+}
+
+function toggleMemberRole(item: { id: string; role: string }) {
+  if (!canManageMember(item)) return
+  emit('updateMemberRole', { userID: item.id, role: item.role === 'admin' ? 'member' : 'admin' })
+}
+
+function addManagedMember(user: SearchUserResult) {
+  emit('addMembers', [user.id])
+  manageQuery.value = ''
+  manageResults.value = []
+}
+
+function resetManageSearch() {
+  if (manageSearchTimer) window.clearTimeout(manageSearchTimer)
+  manageSearchTimer = null
+  manageQuery.value = ''
+  manageResults.value = []
+  manageBusy.value = false
+}
 
 async function downloadAttachment(attachmentID: string, filename: string, fallbackURL?: string) {
   let href = (fallbackURL || '').trim()
@@ -510,7 +789,7 @@ async function downloadAttachment(attachmentID: string, filename: string, fallba
 
 function openGroupSettings() {
   if (props.selectedChat?.is_direct) return
-  activeTab.value = 'members'
+  if (activeTab.value !== 'manage') activeTab.value = 'members'
   manageMembers.value = !manageMembers.value
   void nextTick(() => {
     rootRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
@@ -554,30 +833,36 @@ function openGroupSettings() {
       @update-member-role="emit('updateMemberRole', $event)"
       @remove-member="emit('removeMember', $event)"
       @create-invite-link="emit('createInviteLink', $event)"
+      @chat-updated="emit('chatUpdated', $event)"
     />
     <template v-else>
     <div class="ipHeader">
       <div class="ipHeaderLeft">
-        <button type="button" class="ipIconBtn" :aria-label="t('chat.back')" @click="emit('close')">
-          <v-icon icon="mdi-arrow-left" size="18" />
+        <button type="button" class="ipIconBtn" :aria-label="t('chat.close')" @click="emit('close')">
+          <v-icon icon="mdi-close" size="18" />
         </button>
-        <div class="ipTitle">{{ isGroupMode ? t('chat.group_info') : t('chat.settings') }}</div>
+        <div class="ipTitle">{{ infoTitle }}</div>
       </div>
       <div class="ipHeaderActions">
         <button v-if="!selectedChat?.is_direct && canManageGroup" type="button" class="ipIconBtn" :aria-label="t('chat.group_settings')" @click="openGroupSettings">
           <v-icon :icon="manageMembers ? 'mdi-cog' : 'mdi-cog-outline'" size="18" />
         </button>
-        <button type="button" class="ipIconBtn" :aria-label="t('chat.close')" @click="emit('close')">
-          <v-icon icon="mdi-close" size="18" />
-        </button>
       </div>
     </div>
 
     <div class="ipHero">
-      <div v-if="avatarSrc" class="ipHeroAvatar">
-        <img class="ipAvatarImg" :src="avatarSrc" alt="" />
-      </div>
-      <div v-else class="ipHeroAvatarFallback">{{ displayName.slice(0, 1).toUpperCase() }}</div>
+      <div
+            v-if="avatarSrc"
+            class="ipHeroAvatar ipHeroAvatar--btn"
+            role="button"
+            tabindex="0"
+            :aria-label="t('chat.preview_avatar', undefined, 'View avatar')"
+            @click="openAvatarPreview(avatarSrc, displayName, heroGalleryOwner)"
+            @keydown.enter.prevent="openAvatarPreview(avatarSrc, displayName, heroGalleryOwner)"
+          >
+            <img class="ipAvatarImg" :src="avatarSrc" alt="" />
+          </div>
+          <div v-else class="ipHeroAvatarFallback" :style="{ background: avatarColorFor(selectedChat?.id || displayName) }">{{ displayName.slice(0, 1).toUpperCase() }}</div>
       <div class="ipName">{{ displayName }}</div>
       <div v-if="subtitle" class="ipSubtitle">{{ subtitle }}</div>
     </div>
@@ -599,6 +884,39 @@ function openGroupSettings() {
       </div>
     </div>
 
+    <div v-if="showProfilePlaylist" class="ipPlaylistSection">
+      <div class="ipPlaylistHead">
+        <v-icon icon="mdi-music-note" size="18" class="ipPlaylistIcon" />
+        <span class="ipPlaylistTitle">{{ t('chat.playlist', undefined, 'Playlist') }}</span>
+        <span class="ipPlaylistCount">{{ profileTracks.length }}</span>
+      </div>
+
+      <div v-if="profileTracksLoading" class="ipEmpty">{{ t('common.loading') }}</div>
+      <div v-else-if="profileTracks.length === 0" class="ipEmpty">
+        {{ t('chat.playlist_empty', undefined, 'No saved tracks yet') }}
+      </div>
+      <template v-else>
+        <button
+          v-for="track in profileTracks"
+          :key="track.id"
+          type="button"
+          class="ipTrackItem"
+          :class="{ active: isProfileTrackCurrent(track), unavailable: isProfileTrackUnavailable(track) }"
+          @click="playProfileTrack(track)"
+        >
+          <span class="ipTrackPlay">
+            <v-icon :icon="isProfileTrackPlaying(track) ? 'mdi-pause' : 'mdi-play'" size="16" />
+          </span>
+          <span class="ipTrackMain">
+            <span class="ipTrackTitle">{{ track.title }}</span>
+            <span v-if="track.artist" class="ipTrackArtist">{{ track.artist }}</span>
+            <span v-if="isProfileTrackUnavailable(track)" class="ipTrackUnavailable">{{ t('player.unavailable', undefined, 'Unavailable — the audio file was deleted') }}</span>
+          </span>
+          <span v-if="track.duration > 0" class="ipTrackTime">{{ formatPlayerTime(track.duration) }}</span>
+        </button>
+      </template>
+    </div>
+
     <div class="ipTabs">
       <button
         v-if="!selectedChat?.is_direct && !isUserInfoMode"
@@ -608,6 +926,15 @@ function openGroupSettings() {
         @click="activeTab = 'members'"
       >
         {{ t('chat.members') }}
+      </button>
+      <button
+        v-if="!selectedChat?.is_direct && !isUserInfoMode && canManageGroup"
+        type="button"
+        class="ipTab"
+        :class="{ active: activeTab === 'manage' }"
+        @click="activeTab = 'manage'"
+      >
+        {{ t('chat.manage') }}
       </button>
       <button type="button" class="ipTab" :class="{ active: activeTab === 'media' }" @click="activeTab = 'media'">{{ t('chat.media') }}</button>
       <button type="button" class="ipTab" :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">{{ t('chat.files_tab') }}</button>
@@ -626,17 +953,25 @@ function openGroupSettings() {
             v-if="!canViewChannelMembers"
             type="button"
             class="ipSubscribeBtn"
-            @click="isSubscribedToChannel ? emit('unsubscribeChannel') : emit('subscribeChannel')"
+            @click="onToggleChannelSubscribe"
           >
             {{ isSubscribedToChannel ? t('chat.unsubscribe', undefined, 'Unsubscribe') : t('chat.subscribe', undefined, 'Subscribe') }}
           </button>
         </div>
         <template v-if="canViewChannelMembers && memberItems.length > 0">
           <div v-for="item in memberItems.slice(0, visibleMemberCount)" :key="item.id" class="ipMemberItem">
-            <div class="ipMemberAvatar">
-              <img v-if="item.avatarSrc" :src="item.avatarSrc" alt="" class="ipMemberAvatarImg" />
-              <span v-else class="ipMemberAvatarFallback">{{ item.displayName.slice(0, 1).toUpperCase() }}</span>
+            <div
+              v-if="item.avatarSrc"
+              class="ipMemberAvatar ipMemberAvatar--btn"
+              role="button"
+              tabindex="0"
+              :aria-label="t('chat.preview_avatar', undefined, 'View avatar')"
+              @click="openAvatarPreview(item.avatarSrc, item.displayName, { ownerId: item.id, ownerKind: 'user' })"
+              @keydown.enter.prevent="openAvatarPreview(item.avatarSrc, item.displayName, { ownerId: item.id, ownerKind: 'user' })"
+            >
+              <img :src="item.avatarSrc" alt="" class="ipMemberAvatarImg" />
             </div>
+            <div v-else class="ipMemberAvatar" :style="{ background: avatarColorFor(item.id) }">{{ item.displayName.slice(0, 1).toUpperCase() }}</div>
             <div class="ipMemberMain">
               <div class="ipMemberName">{{ item.displayName }}</div>
               <div class="ipMemberMeta">
@@ -647,6 +982,64 @@ function openGroupSettings() {
           </div>
         </template>
         <div v-else-if="canViewChannelMembers" class="ipEmpty">{{ t('chat.no_participants') }}</div>
+      </div>
+
+      <div v-else-if="activeTab === 'manage'" class="ipList">
+        <div class="ipManageBox">
+          <div class="ipManageState">
+            <span class="ipManageStateTitle">{{ t('chat.manage') }}</span>
+            <button type="button" class="ipManageClose" @click="openGroupSettings">{{ t('chat.group_settings') }}</button>
+          </div>
+          <input v-model="manageQuery" class="ipManageInput" type="search" :placeholder="t('chat.add_participants')" />
+          <div v-if="manageBusy" class="ipEmpty">{{ t('chat.searching') }}</div>
+          <div v-else-if="manageQuery.trim().length >= 2 && manageCandidates.length === 0" class="ipEmpty">
+            {{ t('chat.no_users_found', undefined, 'No users found') }}
+          </div>
+          <div v-else-if="manageCandidates.length > 0" class="ipManageResults">
+            <button
+              v-for="user in manageCandidates"
+              :key="user.id"
+              type="button"
+              class="ipManageResult"
+              @click="addManagedMember(user)"
+            >
+              <span class="ipMemberAvatar" :style="{ background: avatarColorFor(user.id) }">
+                <img v-if="resultAvatarSrc(user)" :src="resultAvatarSrc(user)" alt="" class="ipMemberAvatarImg" />
+                <template v-else>{{ (user.first_name || user.username || '?').slice(0, 1).toUpperCase() }}</template>
+              </span>
+              <span class="ipMemberMain">
+                <span class="ipMemberName">{{ `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.username }}</span>
+                <span class="ipMemberMeta"><span v-if="user.username">@{{ user.username }}</span></span>
+              </span>
+            </button>
+          </div>
+        </div>
+        <div v-for="item in memberItems.slice(0, visibleMemberCount)" :key="item.id" class="ipMemberItem">
+          <div
+            v-if="item.avatarSrc"
+            class="ipMemberAvatar ipMemberAvatar--btn"
+            role="button"
+            tabindex="0"
+            :aria-label="t('chat.preview_avatar', undefined, 'View avatar')"
+            @click="openAvatarPreview(item.avatarSrc, item.displayName, { ownerId: item.id, ownerKind: 'user' })"
+            @keydown.enter.prevent="openAvatarPreview(item.avatarSrc, item.displayName, { ownerId: item.id, ownerKind: 'user' })"
+          >
+            <img :src="item.avatarSrc" alt="" class="ipMemberAvatarImg" />
+          </div>
+          <div v-else class="ipMemberAvatar" :style="{ background: avatarColorFor(item.id) }">{{ item.displayName.slice(0, 1).toUpperCase() }}</div>
+          <div class="ipMemberMain">
+            <div class="ipMemberName">{{ item.displayName }}</div>
+            <div class="ipMemberMeta">
+              <span v-if="item.username">@{{ item.username }}</span>
+              <span>{{ item.role }}</span>
+            </div>
+          </div>
+          <div v-if="canManageMember(item)" class="ipMemberActions">
+            <button type="button" class="ipRoleBtn" @click="toggleMemberRole(item)">{{ memberRoleActionLabel(item.role) }}</button>
+            <button type="button" class="ipDangerBtn" @click="emit('removeMember', item.id)">{{ t('chat.remove') }}</button>
+          </div>
+        </div>
+        <div v-if="memberItems.length === 0" class="ipEmpty">{{ t('chat.no_participants') }}</div>
       </div>
 
       <div v-else-if="activeTab === 'media'" class="ipMediaGrid">
@@ -714,7 +1107,8 @@ function openGroupSettings() {
 
 <style scoped>
 .ipRoot {
-  width: 370px;
+  animation: uiDockIn 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  width: 100%;
   max-width: 100%;
   flex: 1 1 0;
   min-width: 0;
@@ -793,6 +1187,10 @@ function openGroupSettings() {
   overflow: hidden;
 }
 
+.ipHeroAvatar--btn {
+  cursor: pointer;
+}
+
 .ipAvatarImg {
   width: 100%;
   height: 100%;
@@ -852,6 +1250,118 @@ function openGroupSettings() {
   color: var(--text-muted);
 }
 
+.ipPlaylistSection {
+  padding: 4px 20px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.ipPlaylistHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 6px;
+}
+
+.ipPlaylistIcon {
+  color: var(--link);
+}
+
+.ipPlaylistTitle {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.ipPlaylistCount {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ipTrackItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 6px;
+  margin: 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.ipTrackItem:hover {
+  background: var(--surface-soft);
+}
+
+.ipTrackItem.active {
+  background: var(--accent-soft);
+}
+
+.ipTrackPlay {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  color: var(--text);
+  flex: 0 0 auto;
+}
+
+.ipTrackItem.active .ipTrackPlay {
+  background: var(--accent);
+  color: #fff;
+}
+
+.ipTrackMain {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ipTrackTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ipTrackArtist {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ipTrackUnavailable {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ef4444;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ipTrackItem.unavailable {
+  opacity: 0.72;
+}
+
+.ipTrackTime {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
 .ipTabs {
   padding: 4px 16px 8px;
   display: flex;
@@ -873,7 +1383,7 @@ function openGroupSettings() {
 }
 
 .ipTab.active {
-  color: var(--accent-strong);
+  color: var(--link);
   background: var(--accent-soft);
 }
 
@@ -1015,10 +1525,10 @@ html[data-theme='dark'] .ipMediaSkeleton {
 .ipSubscribeBtn {
   min-height: 40px;
   padding: 0 16px;
-  border: 1px solid rgba(74, 144, 217, 0.22);
+  border: 1px solid color-mix(in srgb, var(--link) 22%, transparent);
   border-radius: 999px;
   background: var(--accent-soft);
-  color: var(--accent-strong);
+  color: var(--link);
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
@@ -1036,14 +1546,14 @@ html[data-theme='dark'] .ipMediaSkeleton {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
-  border: 1px solid rgba(25, 118, 210, 0.22);
-  background: rgba(25, 118, 210, 0.06);
+  border: 1px solid color-mix(in srgb, var(--link) 22%, transparent);
+  background: color-mix(in srgb, var(--link) 6%, transparent);
 }
 
 .ipManageStateTitle {
   font-size: 13px;
   font-weight: 700;
-  color: #1565c0;
+  color: var(--link);
 }
 
 .ipManageClose {
@@ -1051,8 +1561,8 @@ html[data-theme='dark'] .ipMediaSkeleton {
   height: 28px;
   padding: 0 10px;
   border: 0;
-  background: rgba(25, 118, 210, 0.14);
-  color: #1565c0;
+  background: color-mix(in srgb, var(--link) 14%, transparent);
+  color: var(--link);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
@@ -1117,6 +1627,10 @@ html[data-theme='dark'] .ipMediaSkeleton {
   letter-spacing: -.02em;
 }
 
+.ipMemberAvatar--btn {
+  cursor: pointer;
+}
+
 .ipMemberAvatarImg {
   width: 100%;
   height: 100%;
@@ -1169,8 +1683,8 @@ html[data-theme='dark'] .ipMediaSkeleton {
 }
 
 .ipDangerBtn {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.24);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 24%, transparent);
 }
 
 .ipFileItem,
@@ -1226,5 +1740,12 @@ html[data-theme='dark'] .ipMediaSkeleton {
   padding: 4px 0;
   font-size: 13px;
   color: var(--text-muted);
+}
+@keyframes uiDockIn {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ipRoot { animation: none; }
 }
 </style>

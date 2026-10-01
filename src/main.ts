@@ -4,8 +4,15 @@ import { router } from './router'
 import vuetify, { syncVuetifyTheme } from './plugins/vuetify'
 import { initTheme, onThemeChange, resolveAccentHex, resolveEffectiveTheme } from './theme/theme'
 import { flushOutbox } from './lib/offline/outbox'
+import { vLongContext } from './directives/longContext'
 import './index.css'
 import './components/core/core.css'
+import { applyInterfaceScale, applyPowerSaving, loadInterfaceScale, loadPowerSaving } from './components/settings/settingsEffects'
+
+// Apply scale + power-saving classes on first paint (before App mounts),
+// otherwise the first frame flashes unscaled/animated.
+applyInterfaceScale(loadInterfaceScale())
+applyPowerSaving(loadPowerSaving())
 
 const initialPrefs = initTheme()
 syncVuetifyTheme(initialPrefs.mode, resolveEffectiveTheme(initialPrefs.mode), resolveAccentHex(initialPrefs))
@@ -26,4 +33,4 @@ if ('serviceWorker' in navigator) {
   })
 }
 
-createApp(App).use(vuetify).use(router).mount('#app')
+createApp(App).directive('longContext', vLongContext).use(vuetify).use(router).mount('#app')

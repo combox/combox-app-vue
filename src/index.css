@@ -8,6 +8,7 @@
 }
 
 :root {
+  color-scheme: light;
   --bg: #eef2f7;
   --bg-elevated: #f7f9fc;
   --surface: rgba(255, 255, 255, 0.96);
@@ -37,6 +38,25 @@
   --app-bg:
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.92), rgba(238, 242, 247, 0.95) 42%),
     linear-gradient(180deg, #f5f7fb 0%, #edf1f6 100%);
+
+  /* Glass layers — semi-transparent surfaces over the wallpaper */
+  --msg-bubble-in: rgba(255, 255, 255, 0.82);
+  --msg-bubble-out: color-mix(in srgb, var(--accent) 18%, rgba(255, 255, 255, 0.86));
+  --msg-list-glass: rgba(248, 250, 255, 0.5);
+  --msg-panel-glass: rgba(255, 255, 255, 0.78);
+  --msg-bar-glass: rgba(250, 251, 254, 0.88);
+  --msg-glass-blur: 18px;
+
+  --link: color-mix(in srgb, var(--accent-strong) 76%, #0f172a);
+  --link-on-accent: color-mix(in srgb, var(--accent-strong) 66%, #0f172a);
+  --danger: color-mix(in srgb, #ef4444 84%, #0f172a);
+
+  --scrim: rgba(15, 23, 42, 0.38);
+  --scrim-solid: rgb(15, 23, 42);
+  --scrim-blur: 6px;
+  --scrim-soft: rgba(15, 23, 42, 0.32);
+  --viewer-scrim: rgba(10, 12, 18, 0.9);
+  --viewer-scrim-blur: 10px;
 }
 
 html[data-theme='dark'] {
@@ -57,28 +77,86 @@ html[data-theme='dark'] {
   --app-bg:
     radial-gradient(circle at top left, rgba(36, 36, 44, 0.92), rgba(11, 11, 12, 0.95) 42%),
     linear-gradient(180deg, #0b0b0c 0%, #050506 100%);
+
+  --msg-bubble-in: rgba(24, 24, 35, 0.85);
+  --msg-bubble-out: color-mix(in srgb, var(--accent) 84%, rgba(8, 8, 12, 0.02));
+  --msg-list-glass: rgba(9, 10, 13, 0.5);
+  --msg-panel-glass: rgba(18, 18, 23, 0.72);
+  --msg-bar-glass: rgba(14, 15, 20, 0.9);
+
+  --link: color-mix(in srgb, var(--accent) 55%, #ffffff);
+  --link-on-accent: #ffffff;
+  --danger: color-mix(in srgb, #ef4444 86%, #ffffff);
+
+  --scrim: rgba(0, 0, 0, 0.5);
+  --scrim-solid: #000000;
+  --scrim-blur: 6px;
+  --scrim-soft: rgba(9, 10, 13, 0.32);
+  --viewer-scrim: rgba(0, 0, 0, 0.9);
+  --viewer-scrim-blur: 10px;
 }
 
-html[data-theme='dark'] input,
-html[data-theme='dark'] textarea,
-html[data-theme='dark'] select {
+input,
+textarea,
+select,
+[contenteditable='true'] {
   color: var(--text);
   caret-color: var(--text);
 }
 
-html[data-theme='dark'] input::placeholder,
-html[data-theme='dark'] textarea::placeholder {
+input::placeholder,
+textarea::placeholder,
+[contenteditable='true']::placeholder {
   color: var(--text-muted);
+}
+
+.v-field__input {
+  color: var(--text);
+  caret-color: var(--text);
+}
+
+.v-field__input::placeholder {
+  color: var(--text-muted);
+}
+
+html[data-theme='light'] input,
+html[data-theme='light'] textarea,
+html[data-theme='light'] select,
+html[data-theme='light'] [contenteditable='true'],
+html[data-theme='light'] .v-field__input {
+  caret-color: var(--accent-strong);
 }
 
 html[data-theme='dark'] .v-field__input,
 html[data-theme='dark'] .v-label,
 html[data-theme='dark'] .v-field-label {
   color: var(--text) !important;
+  caret-color: var(--text) !important;
 }
 
 html[data-theme='dark'] .v-field__input::placeholder {
   color: var(--text-muted) !important;
+}
+
+section.conversation > .composerInline,
+section.conversation > .viewerActionBar {
+  position: relative;
+  z-index: 41;
+}
+
+section.conversation > .chatPlayer {
+  position: relative;
+  z-index: 42;
+}
+
+section.conversation > .wsDropzone {
+  background: var(--scrim-soft);
+  -webkit-backdrop-filter: blur(var(--scrim-blur));
+  backdrop-filter: blur(var(--scrim-blur));
+}
+
+.v-overlay__scrim {
+  background: var(--scrim-solid);
 }
 
 /* cyrillic */
@@ -155,7 +233,7 @@ body,
 
 body {
   font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif, 'NotoColorEmoji',
-    'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+    'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   color: var(--text);
   background: var(--app-bg);
   text-rendering: optimizeLegibility;
@@ -171,7 +249,52 @@ select {
 }
 
 .emoji {
-  font-family: 'NotoColorEmoji', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
+  font-family: 'NotoColorEmoji', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji',
+    sans-serif;
   font-style: normal;
   font-weight: 400;
+}
+
+/* ── Thin semi-transparent scrollbars ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 23, 42, 0.18) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.18);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 23, 42, 0.3);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+html[data-theme='dark'] * {
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+html[data-theme='dark'] *::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+html[data-theme='dark'] *::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }

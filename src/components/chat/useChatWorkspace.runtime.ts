@@ -1,5 +1,6 @@
-import { computed, ref, watchEffect } from 'vue'
+import { computed, onScopeDispose, provide, ref, watch, watchEffect } from 'vue'
 import { useI18n } from '../../i18n/i18n'
+import { useToast } from '../../composables/useToast'
 import {
   getAttachment,
   getUserByID,
@@ -7,15 +8,19 @@ import {
   getCurrentUser,
   getLocalProfile,
   parseMessageContent,
+  saveLocalProfile,
   searchDirectory,
   type ChatInviteLink,
   type ChatItem,
   type ChatMemberProfile,
   type MessageItem,
   type SearchResults,
+  type SearchUserResult,
 } from 'combox-api'
 import type { ViewMessage } from './chatTypes'
-import { useChatRealtime } from './useChatRealtime'
+import { summarizeMessagePreview } from './chatUtils'
+import { useChatRealtime, type ProfileUpdatePayload } from './useChatRealtime'
+import { handleCallEnded, handleCallStarted, setCallTitleResolver } from '../call/callSession'
 import {
   CHATS_CACHE_KEY,
   EMPTY_SEARCH_RESULTS,
@@ -33,13 +38,15 @@ import { setupWorkspaceComputed } from './chatWorkspace.computed'
 import { setupWorkspaceLifecycle } from './chatWorkspace.lifecycle'
 import { setupWorkspaceLoaders } from './chatWorkspace.loaders'
 import { setupWorkspaceActions } from './chatWorkspace.actions'
+import { CHAT_LIST_ACTIONS } from './chatWorkspace.actions.list'
 import { createContextActions } from './chatWorkspace.actions.context'
 import { enrichChatMembers } from './chatWorkspace.members'
 import { setupWorkspaceMeta } from './chatWorkspace.meta'
 import { setupWorkspaceNavigation } from './chatWorkspace.navigation'
 import { setupWorkspacePresence } from './chatWorkspace.presence'
+import { setupWorkspaceTyping, type TypingMap } from './chatWorkspace.typing'
 import { setupWorkspaceRuntimeHelpers } from './chatWorkspace.runtimeHelpers'
-import { tryPlayMessageSound, tryShowDesktopNotification } from './chatWorkspace.notifications'
+import { installNotificationHooks, notificationsEnabled, notificationNotice, tryPlayMessageSound, tryShowDesktopNotification } from './chatWorkspace.notifications'
 import { readJSON, writeJSON } from './chatWorkspace.storage'
 import { persistStatusToChatCache, persistStatusToGlobalCache } from './chatWorkspace.status'
 import { setupWorkspaceWatchers } from './chatWorkspace.watchers'
@@ -54,8 +61,11 @@ import type {
 } from './chatWorkspace.types'
 
 const attachmentRequests = new Map<string, Promise<void>>()
+const notifiedMessageIDs = new Set<string>()
+let notificationPermissionSurfaced = false
 const presenceClient = new ComboxClient()
 const directChatClient = new ComboxClient()
+const toast = useToast()
 
 function readEventPreview(payload: Record<string, unknown>): string {
   if (typeof payload.preview === 'string' && payload.preview.trim()) return payload.preview
@@ -67,6 +77,13 @@ function readEventCreatedAt(payload: Record<string, unknown>): string {
   if (typeof payload.createdAt === 'string' && payload.createdAt.trim()) return payload.createdAt
   if (typeof payload.created_at === 'string' && payload.created_at.trim()) return payload.created_at
   return ''
+}
+
+function sanitizeSharedChatPatch(chat: Record<string, unknown>): Partial<ChatItem> {
+  const next = { ...chat }
+  delete next.archived
+  delete next.pinned
+  return next as Partial<ChatItem>
 }
 
 export function useChatWorkspace() {
@@ -125,14 +142,37 @@ export function useChatWorkspace() {
   const searchingDirectory = ref(false)
   const sending = ref(false)
   const errorText = ref('')
+  let errorClearTimer: number | null = null
+
+  watch(errorText, (value) => {
+    if (errorClearTimer) {
+      window.clearTimeout(errorClearTimer)
+      errorClearTimer = null
+    }
+    if (!value) return
+    errorClearTimer = window.setTimeout(() => {
+      errorClearTimer = null
+      if (errorText.value === value) errorText.value = ''
+    }, 6000)
+  })
+
+  onScopeDispose(() => {
+    if (errorClearTimer) {
+      window.clearTimeout(errorClearTimer)
+      errorClearTimer = null
+    }
+  })
   const readReportedMessageIDs = ref(new Set<string>())
 
   const windowActive = ref(true)
   const isNearBottom = ref(true)
   const processedIncomingMessageIDs = ref(new Set<string>())
   const wsConnected = ref(false)
+  const profileUpdate = ref<ProfileUpdatePayload | null>(null)
   const presenceByUserId = ref<Record<string, PresenceItem>>({})
   const realtimeExtraChatIDs = ref<string[]>([])
+  const typingByChat = ref<TypingMap>({})
+  let handleTypingEvent: ((payload: { chatID: string; userID: string }) => void) | null = null
   const {
     selectedChat,
     directPeerId,
@@ -164,6 +204,7 @@ export function useChatWorkspace() {
     chatMembers,
     presenceByUserId,
     pendingFiles,
+    typingByChat,
   })
   const {
     selectedGroupChannelByGroupId,
@@ -238,7 +279,7 @@ export function useChatWorkspace() {
     persistGroupSelection,
   })
 
-  const { start, stop, sendRequest, sendEvent } = useChatRealtime({
+  const { start, stop, sendRequest, sendEvent, ensureConnected } = useChatRealtime({
     getSelectedChatID: () => activeMessagesChatID.value,
     getAdditionalChatIDs: () => realtimeExtraChatIDs.value,
     reloadChats: async () => {
@@ -278,11 +319,61 @@ export function useChatWorkspace() {
           if (item.id !== eventChatID) return item
           return {
             ...item,
-            ...(chatNode as unknown as Partial<ChatItem>),
+            ...sanitizeSharedChatPatch(chatNode),
           }
         })
         writeJSON(CHATS_CACHE_KEY, chats.value)
       }
+    },
+    onChatUpdated: ({ chatID, chat }) => {
+      patchChatLocally(chatID, sanitizeSharedChatPatch(chat))
+    },
+    onProfileUpdate: (payload) => {
+      const userID = (payload.userID || '').trim()
+      if (!userID) return
+      const incoming: SearchUserResult = { ...payload.user, id: (payload.user?.id || '').trim() || userID }
+      const isSelf = (currentUser?.id || '').trim() === userID
+      if (isSelf) {
+        saveLocalProfile({
+          firstName: incoming.first_name || '',
+          lastName: incoming.last_name || '',
+          birthDate: incoming.birth_date || undefined,
+          avatarDataUrl: incoming.avatar_data_url || '',
+          gradient: incoming.avatar_gradient || '',
+        })
+      }
+      if ((peerProfile.value?.id || '').trim() === userID) {
+        peerProfile.value = normalizePeerProfile(incoming)
+      }
+      if ((focusedInfoUserProfile.value?.id || '').trim() === userID) {
+        focusedInfoUserProfile.value = normalizePeerProfile(incoming)
+      }
+      if (chatMembers.value.some((member) => (member.user_id || '').trim() === userID)) {
+        chatMembers.value = chatMembers.value.map((member) =>
+          (member.user_id || '').trim() === userID ? { ...member, profile: incoming } : member,
+        )
+      }
+      if (directoryResults.value.users.some((user) => (user.id || '').trim() === userID)) {
+        directoryResults.value = {
+          ...directoryResults.value,
+          users: directoryResults.value.users.map((user) =>
+            (user.id || '').trim() === userID ? { ...user, ...incoming } : user,
+          ),
+        }
+      }
+      const directPatch: Partial<ChatItem> = {}
+      const display = `${(incoming.first_name || '').trim()} ${(incoming.last_name || '').trim()}`.trim() || (incoming.username || '').trim()
+      if (display) directPatch.title = display
+      if ('avatar_data_url' in incoming) directPatch.avatar_data_url = incoming.avatar_data_url
+      if ('avatar_gradient' in incoming) directPatch.avatar_gradient = incoming.avatar_gradient
+      if (Object.keys(directPatch).length > 0) {
+        for (const chat of chats.value) {
+          if (!chat.is_direct) continue
+          if ((chat.peer_user_id || '').trim() !== userID) continue
+          patchChatLocally(chat.id, directPatch)
+        }
+      }
+      profileUpdate.value = { userID, user: incoming }
     },
     onMessageDeleted: (messageID) => {
       rawMessages.value = rawMessages.value.filter((item) => item.id !== messageID)
@@ -324,7 +415,6 @@ export function useChatWorkspace() {
     onNotificationMessageCreated: (payload) => {
       const chatID = (payload.chatID || '').trim()
       const messageID = (payload.messageID || '').trim()
-      const alreadySeen = Boolean(messageID && processedIncomingMessageIDs.value.has(messageID))
 
       applyUnreadFromIncoming(payload.chatID, payload.senderUserID, payload.messageID)
       updateGroupChannelPreview(payload.chatID, readEventPreview(payload as Record<string, unknown>), readEventCreatedAt(payload as Record<string, unknown>))
@@ -337,18 +427,52 @@ export function useChatWorkspace() {
         mutedChatIDs.value = { ...mutedChatIDs.value, [chatID]: true }
       }
 
-      if (mutedByEvent || alreadySeen || !chatID) return
+      if (!chatID || mutedByEvent || mutedChatIDs.value[chatID]) return
+      const senderID = (payload.senderUserID || '').trim()
+      if (senderID && senderID === (currentUser?.id || '').trim()) return
+      if (!notificationsEnabled.value) return
+      if (messageID) {
+        if (notifiedMessageIDs.has(messageID)) return
+        notifiedMessageIDs.add(messageID)
+        if (notifiedMessageIDs.size > 500) notifiedMessageIDs.clear()
+      }
+
       const activeChatID = activeMessagesChatID.value.trim()
-      const isActiveChat = Boolean(activeChatID && activeChatID === chatID)
-      const shouldNotify = !windowActive.value || !isActiveChat || !isNearBottom.value
-      if (!shouldNotify) return
+      if (windowActive.value && activeChatID === chatID) return
 
       const chat = chats.value.find((c) => (c.id || '').trim() === chatID)
       const title = ((chat?.title || '').trim() || 'ComBox').slice(0, 80)
+      // The preview still contains [[att:…]] tokens: parse them instead of
+      // letting a bare attachment id reach the user's notification body.
+      const rawPreview =
+        (payload.preview || '').trim() ||
+        (chat?.last_message_preview || '').trim()
+      const body = summarizeMessagePreview(rawPreview, {
+        gif: t('chat.gif'),
+        video: t('chat.video'),
+        photo: t('chat.photo'),
+        audio: t('chat.audio'),
+        file: t('chat.file'),
+        empty: t('chat.new_message', undefined, 'New message'),
+        voice: t('chat.audio_message', undefined, 'Voice message'),
+        round: t('chat.video_message', undefined, 'Video message'),
+      }).slice(0, 160)
       tryPlayMessageSound()
-      const body = ((chat?.last_message_preview || '').trim() || 'New message').slice(0, 160)
-      tryShowDesktopNotification({ title, body })
+      void tryShowDesktopNotification({ title, body, chatID }).then((result) => {
+        if (result !== 'denied' && result !== 'unsupported') return
+        if (notificationPermissionSurfaced) return
+        notificationPermissionSurfaced = true
+        const notice = notificationNotice.value
+        if (notice) toast.error(notice)
+      })
     },
+    onCallStarted: (payload) => {
+      handleCallStarted(payload)
+    },
+    onCallEnded: (payload) => {
+      handleCallEnded(payload)
+    },
+    onTyping: (payload) => handleTypingEvent?.(payload),
     onPresenceUpdate: (payload) => {
       presenceByUserId.value = {
         ...presenceByUserId.value,
@@ -362,6 +486,8 @@ export function useChatWorkspace() {
     },
   })
 
+  setCallTitleResolver((chatID) => chats.value.find((item) => item.id === chatID)?.title ?? '')
+
   const {
     requestViaWs,
     sendPresencePing,
@@ -370,11 +496,37 @@ export function useChatWorkspace() {
     handlePresenceActivity,
   } = setupWorkspacePresence({
     wsConnected,
-    windowActive,
     syncWindowActivity,
     sendRequest,
     sendEvent,
+    ensureConnected,
   })
+
+  const typing = setupWorkspaceTyping({
+    wsConnected,
+    sendEvent,
+    typingByChat,
+    getSelfUserID: () => (currentUser?.id || '').trim(),
+    ensureConnected,
+  })
+  handleTypingEvent = (payload) => typing.recordTyping(payload.chatID, payload.userID)
+
+  watch(
+    wsConnected,
+    (connected) => {
+      // A fresh socket has no chat subscriptions yet.
+      if (connected) {
+        typing.resubscribeAll()
+        typing.subscribe(activeMessagesChatID.value)
+      }
+    },
+    { immediate: true },
+  )
+  watch(activeMessagesChatID, (chatID, previous) => {
+    if (previous && previous !== chatID) typing.unsubscribe(previous)
+    typing.subscribe(chatID)
+  })
+  onScopeDispose(() => typing.dispose())
 
   const { loadChats, loadNotifications, loadGroupChannels, loadMessages, runDirectorySearch } = setupWorkspaceLoaders({
     t,
@@ -429,6 +581,7 @@ export function useChatWorkspace() {
     selectDirectoryChat,
     openDirectChatWithUser,
     openDirectChatByUsername,
+    resolvePendingDirectChat,
     acceptInviteFromHashIfNeeded,
     acceptInviteLinkFromHashIfNeeded,
     handleHashChange,
@@ -471,6 +624,13 @@ export function useChatWorkspace() {
     addMembersToSelectedGroup,
     updateSelectedGroupMemberRole,
     removeSelectedGroupMember,
+    toggleArchived,
+    togglePinned,
+    reorderPinned,
+    markRead,
+    clearHistory,
+    reloadActiveChat,
+    removeChat,
   } = setupWorkspaceActions({
     t,
     currentUser,
@@ -499,6 +659,7 @@ export function useChatWorkspace() {
     loadChats,
     loadGroupChannels,
     loadMessages,
+    resolvePendingDirectChat,
     selectChat,
     refreshChatMembers,
     refreshSelectedChatInviteLinks,
@@ -508,6 +669,20 @@ export function useChatWorkspace() {
     persistGroupSelection,
     clearHash,
     patchChatLocally,
+  })
+
+  provide(CHAT_LIST_ACTIONS, {
+    toggleArchived,
+    togglePinned,
+    reorderPinned,
+    markRead,
+    clearHistory,
+    reloadActiveChat,
+    removeChat,
+  })
+
+  installNotificationHooks((chatID) => {
+    void selectChat(chatID)
   })
 
   function markMessagesRead(chatID: string, messageIDs: string[]) {
@@ -662,7 +837,10 @@ export function useChatWorkspace() {
     visibleGroupChannels,
     loadingGroupChannels,
     wsConnected,
+    profileUpdate,
     realtimeExtraChatIDs,
+    typingByChat,
+    noteTyping: typing.noteTyping,
     setChatFilter,
     selectChat,
     selectDirectoryChat,
