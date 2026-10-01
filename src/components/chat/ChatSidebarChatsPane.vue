@@ -78,6 +78,21 @@ const scopeKey = computed(() => chatScopeFromTab(props.selectedFilterTab))
 
 const isPinnedHere = (chat: ChatItem) => Boolean(chat.pinned) && (chat.pin_scope || 'all') === scopeKey.value
 
+/**
+ * Saved Messages self-chat (backend chat_kind 'saved', one per user, created
+ * lazily by ListChats). It is rendered with a bookmark avatar and the
+ * localized title, and it always stays first in "All chats" — ahead of even
+ * pinned chats, like in Telegram. Pin/mute/archive are meaningless for it, so
+ * the context menu hides those entries (see the template below).
+ */
+function isSavedChat(chat: ChatItem): boolean {
+  return String(chat.kind || '').trim() === 'saved'
+}
+
+function savedChatTitle(): string {
+  return t('chat.saved_messages', undefined, 'Saved Messages')
+}
+
 function chatDraftFor(chat: ChatItem): string {
   const id = String(chat.id || '').trim()
   if (!id) return ''
@@ -111,9 +126,14 @@ const showArchiveRow = computed(() => {
 
 const displayChats = computed(() => {
   const base = props.archiveOpen ? archivedChats.value : props.chats.filter((chat) => !chat.archived)
-  const pinned = base.filter(isPinnedHere).sort((a, b) => (b.pin_order || 0) - (a.pin_order || 0))
-  const rest = base.filter((chat) => !isPinnedHere(chat))
-  return [...pinned, ...rest]
+  // The self-chat is never archived (the menu hides Archive for it), but if a
+  // stale archived flag ever arrives it must not hijack the top slot: saved
+  // leads only the regular list, the archive view keeps its own order.
+  const saved = props.archiveOpen ? [] : base.filter(isSavedChat)
+  const restBase = base.filter((chat) => !isSavedChat(chat))
+  const pinned = restBase.filter(isPinnedHere).sort((a, b) => (b.pin_order || 0) - (a.pin_order || 0))
+  const rest = restBase.filter((chat) => !isPinnedHere(chat))
+  return [...saved, ...pinned, ...rest]
 })
 
 /** An empty folder must say so instead of rendering a blank list. */
@@ -176,7 +196,8 @@ function dropList(event: DragEvent) {
 }
 
 function startRowDrag(event: DragEvent, chat: ChatItem) {
-  if (!isPinnedHere(chat)) {
+  // The saved row is fixed at the top and never joins the pinned reorder block.
+  if (isSavedChat(chat) || !isPinnedHere(chat)) {
     event.preventDefault()
     return
   }
@@ -308,6 +329,9 @@ function isChatOwner(chat: ChatItem) {
 }
 
 function canDeleteChat(chat: ChatItem) {
+  // The Saved Messages self-chat is a service chat: it can be neither left
+  // nor deleted, and members cannot be managed (the backend rejects such ops).
+  if (isSavedChat(chat)) return false
   if (chat.is_direct || isBotChat(chat)) return true
   if ((chat.viewer_role || '').trim() !== 'owner') return false
   const kind = (chat.kind || '').trim()
@@ -335,6 +359,8 @@ type ChatPreviewLine = { topic: string; sender: string; sep: string; body: strin
 function chatSenderName(chat: ChatItem): string {
   if (chat.is_direct) return ''
   const kind = (chat.kind || '').trim()
+  // The self-chat only ever contains your own messages: no author prefix.
+  if (kind === 'saved') return ''
   const isTopic = Boolean((chat.parent_chat_id || '').trim())
   if (kind === 'standalone_channel' || kind === 'bot') return ''
   if (kind === 'channel' && !isTopic) return ''
@@ -518,11 +544,14 @@ function chatViewsCount(chat: ChatItem): number {
           @contextmenu="openChatContextMenu($event, chat)"
         >
           <img
-            v-if="normalizeAvatarSrc(chat.avatar_data_url || '')"
+            v-if="!isSavedChat(chat) && normalizeAvatarSrc(chat.avatar_data_url || '')"
             class="cpAvatarImg shelf"
             :src="normalizeAvatarSrc(chat.avatar_data_url || '')"
             :alt="chat.title"
           />
+          <div v-else-if="isSavedChat(chat)" class="cpAvatar shelf cpAvatarSaved" aria-hidden="true">
+            <svg class="cpSavedGlyph" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>
+          </div>
           <div v-else class="cpAvatar shelf" :style="{ background: avatarColorFor(chat.id) }">{{ chat.title.slice(0, 1).toUpperCase() }}</div>
           <span v-if="(unreadByChatId[chat.id] || 0) > 0" class="cpShelfUnread">
             {{ unreadByChatId[chat.id] > 99 ? '99+' : unreadByChatId[chat.id] }}
@@ -664,7 +693,7 @@ function chatViewsCount(chat: ChatItem): number {
                   dragging: dragState?.chatID === chat.id,
                   dragOver: dragState?.overID === chat.id,
                 }"
-                :draggable="isPinnedHere(chat)"
+                :draggable="isPinnedHere(chat) && !isSavedChat(chat)"
                 @click="emit('select-chat', chat.id)"
                 v-long-context
                 @contextmenu="openChatContextMenu($event, chat)"
@@ -672,15 +701,18 @@ function chatViewsCount(chat: ChatItem): number {
                 @dragend="endRowDrag"
               >
                 <img
-                  v-if="normalizeAvatarSrc(chat.avatar_data_url || '')"
+                  v-if="!isSavedChat(chat) && normalizeAvatarSrc(chat.avatar_data_url || '')"
                   class="cpAvatarImg cpAvatarImg--btn"
                   :src="normalizeAvatarSrc(chat.avatar_data_url || '')"
                   :alt="chat.title"
                   @click.stop="previewAvatar($event, normalizeAvatarSrc(chat.avatar_data_url || ''), chat.title, chatOwner(chat))"
                 />
+                <div v-else-if="isSavedChat(chat)" class="cpAvatar cpAvatarSaved" aria-hidden="true">
+                  <svg class="cpSavedGlyph" viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>
+                </div>
                 <div v-else class="cpAvatar" :style="{ background: avatarColorFor(chat.id) }">{{ chat.title.slice(0, 1).toUpperCase() }}</div>
                 <div class="cpMain">
-                  <div class="cpPrimary">{{ chat.title }}</div>
+                  <div class="cpPrimary">{{ isSavedChat(chat) ? savedChatTitle() : chat.title }}</div>
                   <div class="cpSecondaryWrap">
                     <template v-if="chatTyping(chat)">
                       <span class="cpTypingDots" aria-hidden="true">
@@ -705,7 +737,7 @@ function chatViewsCount(chat: ChatItem): number {
                   </div>
                 </div>
                 <div class="cpMeta">
-                  <v-icon v-if="isPinnedHere(chat)" icon="mdi-pin" size="13" class="cpPinIcon" />
+                  <v-icon v-if="isPinnedHere(chat) && !isSavedChat(chat)" icon="mdi-pin" size="13" class="cpPinIcon" />
                   <div class="cpDate">{{ chatRowDate(chat) }}</div>
                   <div v-if="chatViewsCount(chat) > 0" class="cpViews">
                     <v-icon icon="mdi-eye-outline" size="14" class="cpViewsIcon" />
@@ -727,11 +759,11 @@ function chatViewsCount(chat: ChatItem): number {
           class="cpCtxMenu"
           :style="{ left: `${chatContextMenu.x}px`, top: `${chatContextMenu.y}px` }"
         >
-          <button type="button" class="cpCtxItem" @click="emit('chat-context-archive', chatContextMenu.chat); closeChatContextMenu()">
+          <button v-if="!isSavedChat(chatContextMenu.chat)" type="button" class="cpCtxItem" @click="emit('chat-context-archive', chatContextMenu.chat); closeChatContextMenu()">
             <v-icon class="cpCtxIcon" :icon="chatContextMenu.chat.archived ? 'mdi-archive-arrow-up-outline' : 'mdi-archive-outline'" size="17" />
             <span>{{ chatContextMenu.chat.archived ? t('chat.unarchive', undefined, 'Unarchive') : t('chat.archive', undefined, 'Archive') }}</span>
           </button>
-          <button type="button" class="cpCtxItem" @click="emit('chat-context-pin', chatContextMenu.chat); closeChatContextMenu()">
+          <button v-if="!isSavedChat(chatContextMenu.chat)" type="button" class="cpCtxItem" @click="emit('chat-context-pin', chatContextMenu.chat); closeChatContextMenu()">
             <v-icon class="cpCtxIcon" :icon="chatContextMenu.chat.pinned ? 'mdi-pin-off-outline' : 'mdi-pin-outline'" size="17" />
             <span>{{ chatContextMenu.chat.pinned ? t('chat.unpin', undefined, 'Unpin') : t('chat.pin', undefined, 'Pin') }}</span>
           </button>
@@ -744,7 +776,7 @@ function chatViewsCount(chat: ChatItem): number {
             <v-icon class="cpCtxIcon" icon="mdi-check-all" size="17" />
             <span>{{ t('chat.mark_read', undefined, 'Mark as read') }}</span>
           </button>
-          <button type="button" class="cpCtxItem" @click="emit('chat-context-mute', chatContextMenu.chat); closeChatContextMenu()">
+          <button v-if="!isSavedChat(chatContextMenu.chat)" type="button" class="cpCtxItem" @click="emit('chat-context-mute', chatContextMenu.chat); closeChatContextMenu()">
             <v-icon class="cpCtxIcon" :icon="isChatMuted(chatContextMenu.chat.id) ? 'mdi-bell-outline' : 'mdi-bell-off-outline'" size="17" />
             <span>{{ isChatMuted(chatContextMenu.chat.id) ? t('chat.unmute', undefined, 'Unmute') : t('chat.mute', undefined, 'Mute') }}</span>
           </button>
@@ -794,7 +826,7 @@ function chatViewsCount(chat: ChatItem): number {
             <span>{{ t('chat.clear_history', undefined, 'Clear history') }}</span>
           </button>
           <button
-            v-if="!chatContextMenu.chat.is_direct && !isBotChat(chatContextMenu.chat) && !isChatOwner(chatContextMenu.chat)"
+            v-if="!chatContextMenu.chat.is_direct && !isBotChat(chatContextMenu.chat) && !isChatOwner(chatContextMenu.chat) && !isSavedChat(chatContextMenu.chat)"
             type="button"
             class="cpCtxItem"
             @click="emit('chat-context-leave', chatContextMenu.chat); closeChatContextMenu()"
@@ -1074,6 +1106,14 @@ function chatViewsCount(chat: ChatItem): number {
   font-size: 20px; font-weight: 700;
   letter-spacing: -.02em;
 }
+/* Saved Messages self-chat: bookmark badge instead of an initial. The glyph
+ * is inline SVG on purpose — mdi-bookmark-outline is NOT in the MDI subset
+ * font (see src/plugins/mdi-subset.css), so a v-icon would render blank. */
+.cpAvatarSaved {
+  background: linear-gradient(135deg, #4a90d9 0%, #2f6cb3 100%);
+  color: #fff;
+}
+.cpSavedGlyph { display: block; }
 
 /* Text area */
 .cpMain { min-width: 0; display: flex; flex-direction: column; gap: 3px; }

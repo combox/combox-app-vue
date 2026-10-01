@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ComboxClient } from 'combox-api'
+import { ComboxClient, getCurrentUser } from 'combox-api'
 import PageShell from '../components/core/PageShell.vue'
 import TGRow from '../components/settings/TGRow.vue'
 import MyAccountSettings from '../components/settings/MyAccountSettings.vue'
@@ -9,7 +9,6 @@ import NotificationsSettings from '../components/settings/NotificationsSettings.
 import PrivacySecuritySettings from '../components/settings/PrivacySecuritySettings.vue'
 import ChatSettings from '../components/settings/ChatSettings.vue'
 import FoldersSettings from '../components/settings/FoldersSettings.vue'
-import RecommendedFolders from '../components/settings/RecommendedFolders.vue'
 import AdvancedSettings from '../components/settings/AdvancedSettings.vue'
 import PowerSavingSettings from '../components/settings/PowerSavingSettings.vue'
 import LanguageSettings from '../components/settings/LanguageSettings.vue'
@@ -18,15 +17,13 @@ import AvatarViewer from '../components/core/AvatarViewer.vue'
 import { APP_VERSION } from '../components/settings/aboutMeta'
 import { useUserSettings } from '../components/settings/userSettingsMeta'
 import {
-  applyInterfaceScale,
   applyPowerSaving,
-  loadInterfaceScale,
   loadPowerSaving,
-  saveInterfaceScale,
   syncNotificationBridge,
 } from '../components/settings/settingsEffects'
 import { useI18n } from '../i18n/i18n'
 import { normalizeAvatarSrc } from '../utils/avatar'
+import { openAvatarPreview } from '../utils/avatarViewer'
 import '../components/settings/settingsShared.css'
 
 type Page =
@@ -48,15 +45,39 @@ const client = new ComboxClient()
 const userSettings = useUserSettings()
 
 const page = ref<Page>('main')
-const foldersKey = ref(0)
 const privacyRef = ref<{ goBack: () => boolean } | null>(null)
 
 const avatarSrc = ref('')
 const displayName = ref('')
 const username = ref('')
+const userId = ref('')
 
-const scaleEnabled = ref(false)
-const scalePercent = ref(100)
+// R6: live connection flag. wsConnected lives inside the chat workspace
+// runtime (useChatWorkspace.runtime.ts) and is not exported globally, while
+// presence is per-peer — so the settings header subscribes to the browser
+// online/offline (navigator.onLine), which fires when the socket's network
+// drops. Offline shows the moment the socket cannot stay alive.
+const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
+
+function handleOnline(): void {
+  isOnline.value = true
+}
+
+function handleOffline(): void {
+  isOnline.value = false
+}
+
+const statusText = computed(() =>
+  isOnline.value
+    ? t('settings.online', undefined, 'Online')
+    : t('presence.offline', undefined, 'Offline'),
+)
+
+function openOverviewAvatar(): void {
+  const ownerId = userId.value.trim() || (getCurrentUser()?.id || '').trim()
+  if (!ownerId) return
+  openAvatarPreview(avatarSrc.value, displayName.value, { ownerId, ownerKind: 'user' })
+}
 
 const initials = computed(() => {
   const parts = displayName.value.trim().split(/\s+/).filter(Boolean)
@@ -136,21 +157,12 @@ function close(): void {
   void router.push('/')
 }
 
-function onScaleToggle(next: boolean | null): void {
-  scaleEnabled.value = next === true
-  saveInterfaceScale({ enabled: scaleEnabled.value, percent: scalePercent.value })
-}
-
-function onScalePercent(next: number): void {
-  scalePercent.value = Math.max(80, Math.min(150, Math.round(next) || 100))
-  saveInterfaceScale({ enabled: scaleEnabled.value, percent: scalePercent.value })
-}
-
 async function loadHeader(): Promise<void> {
   try {
     const data = await client.getProfile()
     avatarSrc.value = normalizeAvatarSrc(data.avatar_data_url || '')
     username.value = data.username || ''
+    userId.value = data.id || ''
     const full = `${data.first_name || ''} ${data.last_name || ''}`.trim()
     displayName.value = full || (data.username ? `@${data.username}` : '')
   } catch {
@@ -159,15 +171,18 @@ async function loadHeader(): Promise<void> {
 }
 
 onMounted(() => {
-  const scale = loadInterfaceScale()
-  scaleEnabled.value = scale.enabled
-  scalePercent.value = scale.percent
-  applyInterfaceScale(scale)
   applyPowerSaving(loadPowerSaving())
   applySectionFromRoute()
   void loadHeader()
+  window.addEventListener('online', handleOnline)
+  window.addEventListener('offline', handleOffline)
   // Push the server master into the live runtime gate as early as possible.
   void userSettings.load().then(() => syncNotificationBridge(userSettings.values))
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('online', handleOnline)
+  window.removeEventListener('offline', handleOffline)
 })
 </script>
 
@@ -187,14 +202,16 @@ onMounted(() => {
               </button>
             </header>
             <section class="tgHero">
-              <span class="tgHeroAvatar">
-                <img v-if="avatarSrc" :src="avatarSrc" alt="" class="tgHeroAvatarImg" />
-                <span v-else>{{ initials }}</span>
-              </span>
+              <button type="button" class="tgHeroAvatarBtn" :aria-label="displayName" :title="displayName" @click="openOverviewAvatar">
+                <span class="tgHeroAvatar">
+                  <img v-if="avatarSrc" :src="avatarSrc" alt="" class="tgHeroAvatarImg" />
+                  <span v-else>{{ initials }}</span>
+                </span>
+              </button>
               <div class="tgHeroMain">
                 <div class="tgHeroName">{{ displayName || t('settings.title', undefined, 'Settings') }}</div>
                 <div class="tgHeroSub">@{{ username || 'username' }}</div>
-                <div class="tgHeroStatus">{{ t('settings.status_online', undefined, 'Active & running') }}</div>
+                <div class="tgHeroStatus" :class="{ isOffline: !isOnline }">{{ statusText }}</div>
               </div>
             </section>
 
@@ -249,31 +266,6 @@ onMounted(() => {
               />
             </section>
 
-            <section class="tgCard tgCardPad">
-              <div class="settingsCard__title">{{ t('settings.tg.scale.title', undefined, 'Interface scale') }}</div>
-              <div class="toggleRow">
-                <div>
-                  <div class="toggleRow__title">{{ t('settings.tg.scale.enable', undefined, 'Custom scale') }}</div>
-                  <div class="toggleRow__sub">{{ t('settings.tg.scale.hint', undefined, 'Scales the whole interface from the default 100%.') }}</div>
-                </div>
-                <v-switch :model-value="scaleEnabled" hide-details inset color="primary" @update:model-value="onScaleToggle" />
-              </div>
-              <div class="tgSliderRow">
-                <input
-                  type="range"
-                  class="tgSlider"
-                  min="80"
-                  max="150"
-                  step="5"
-                  :value="scalePercent"
-                  :disabled="!scaleEnabled"
-                  :aria-label="t('settings.tg.scale.title', undefined, 'Interface scale')"
-                  @input="onScalePercent(Number(($event.target as HTMLInputElement).value))"
-                />
-                <span class="tgSliderVal">{{ scalePercent }}%</span>
-              </div>
-            </section>
-
             <section class="tgCard">
               <TGRow
                 icon="mdi-information-outline"
@@ -299,12 +291,7 @@ onMounted(() => {
             <NotificationsSettings v-else-if="page === 'notifications'" />
             <PrivacySecuritySettings v-else-if="page === 'privacy'" ref="privacyRef" />
             <ChatSettings v-else-if="page === 'chat'" />
-            <template v-else-if="page === 'folders'">
-              <div class="tgPage">
-                <RecommendedFolders @created="foldersKey += 1" />
-                <FoldersSettings :key="foldersKey" />
-              </div>
-            </template>
+            <FoldersSettings v-else-if="page === 'folders'" />
             <AdvancedSettings v-else-if="page === 'advanced'" />
             <PowerSavingSettings v-else-if="page === 'power'" />
             <LanguageSettings v-else-if="page === 'language'" />

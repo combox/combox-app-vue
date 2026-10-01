@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { AuthUser, ChatInviteLink, ChatItem, ChatMemberProfile } from 'combox-api'
 import { normalizeAvatarSrc } from './chatUtils'
+import { setHashToChatId } from './chatWorkspace.hash'
 import { openAvatarPreview } from '../../utils/avatarViewer'
 import { avatarColorFor } from '../../utils/avatarColor'
 import { useI18n } from '../../i18n/i18n'
@@ -107,8 +108,7 @@ const channelLink = computed(() => {
   return `${window.location.origin}${window.location.pathname}${window.location.search}#@${encodeURIComponent(slug)}`
 })
 const channelTypeLabel = computed(() => t('chat.channel', undefined, 'Channel'))
-const commentsEnabled = computed(() => Boolean(props.selectedChat?.comments_enabled ?? true))
-const reactionsEnabled = computed(() => Boolean(props.selectedChat?.reactions_enabled ?? true))
+const discussionID = computed(() => (props.selectedChat?.discussion_chat_id || '').trim())
 const primaryInviteLink = computed(() => props.inviteLinks.find((item) => item.is_primary) || props.inviteLinks[0] || null)
 
 const displayName = computed(() => (props.selectedChat?.title || '').trim() || t('chat.channel_info', undefined, 'Channel'))
@@ -124,12 +124,14 @@ const normalizedMembers = computed(() =>
       username: (profile?.username || '').trim(),
       displayName: display,
       avatarSrc: normalizeAvatarSrc(profile?.avatar_data_url || ''),
+      // O4: subscriber cards never carry the total counter (the header
+      // subtitle already shows it). Regular members always read "Subscriber".
       subtitle:
         ((member.role || '').trim().toLowerCase() === 'owner')
           ? t('chat.owner', undefined, 'Owner')
           : ((member.role || '').trim().toLowerCase() === 'admin')
             ? t('chat.admin', undefined, 'Admin')
-            : props.subtitle || t('chat.subscriber', undefined, 'Subscriber'),
+            : t('chat.subscriber', undefined, 'Subscriber'),
     }
   }),
 )
@@ -281,6 +283,13 @@ function setChannelType(nextPublic: boolean) {
   isPublicDraft.value = nextPublic
   if (!nextPublic) publicSlugDraft.value = ''
 }
+
+function openDiscussionChat(): void {
+  const id = discussionID.value
+  if (!id) return
+  setHashToChatId(id)
+  window.dispatchEvent(new HashChangeEvent('hashchange'))
+}
 </script>
 
 <template>
@@ -352,27 +361,19 @@ function setChannelType(nextPublic: boolean) {
             </div>
           </button>
 
-          <div class="pcFactRow pcFactRow--static">
-            <div class="pcFactIcon"><v-icon icon="mdi-comment-text-outline" size="20" /></div>
+          <button v-if="discussionID" type="button" class="pcFactRow" @click="openDiscussionChat">
+            <div class="pcFactIcon"><v-icon icon="mdi-forum-outline" size="20" /></div>
             <div class="pcFactBody">
-              <div class="pcFactValue">{{ t('chat.comments', undefined, 'Comments') }}</div>
-              <div class="pcFactLabel">{{ commentsEnabled ? t('chat.comments_enabled', undefined, 'Enabled') : t('chat.comments_disabled', undefined, 'Disabled') }}</div>
+              <div class="pcFactValue">{{ t('chat.chanset_view_discussion', undefined, 'View discussion') }}</div>
+              <div class="pcFactLabel">{{ t('chat.chanset_discussion', undefined, 'Discussion') }}</div>
             </div>
-          </div>
-
-          <div class="pcFactRow pcFactRow--static">
-            <div class="pcFactIcon"><v-icon icon="mdi-emoticon-outline" size="20" /></div>
-            <div class="pcFactBody">
-              <div class="pcFactValue">{{ t('chat.reactions', undefined, 'Reactions') }}</div>
-              <div class="pcFactLabel">{{ reactionsEnabled ? t('chat.reactions_enabled', undefined, 'Enabled') : t('chat.reactions_disabled', undefined, 'Disabled') }}</div>
-            </div>
-          </div>
+            <v-icon icon="mdi-chevron-right" size="18" class="pcChevron" />
+          </button>
 
           <button v-if="canViewMembers" type="button" class="pcFactRow" @click="panelMode = 'subscribers'">
             <div class="pcFactIcon"><v-icon icon="mdi-account-group-outline" size="20" /></div>
             <div class="pcFactBody">
-              <div class="pcFactValue">{{ t('chat.subscribers', { count: subscriberCount }, `${subscriberCount} subscribers`) }}</div>
-              <div class="pcFactLabel">{{ subscriberCount }}</div>
+              <div class="pcFactValue">{{ t('chat.subscribers_title', undefined, 'Subscribers') }}</div>
             </div>
             <v-icon icon="mdi-chevron-right" size="18" class="pcChevron" />
           </button>

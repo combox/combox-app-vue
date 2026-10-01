@@ -3,17 +3,32 @@ import { useI18n } from '../../i18n/i18n'
 import { openAvatarPreview } from '../../utils/avatarViewer'
 import { avatarColorFor } from '../../utils/avatarColor'
 import TypingIndicator from './TypingIndicator.vue'
-const props = defineProps<{
-  title: string
-  subtitle: string
-  typingLabel?: string
-  avatarText: string
-  avatarSrc?: string
-  searchOpen: boolean
-  searchValue: string
-  showBack?: boolean
-  backAriaLabel?: string
-  streamMode?: boolean
+const props = withDefaults(
+  defineProps<{
+    title: string
+    subtitle: string
+    typingLabel?: string
+    avatarText: string
+    avatarSrc?: string
+    searchOpen: boolean
+    searchValue: string
+    showBack?: boolean
+    backAriaLabel?: string
+    streamMode?: boolean
+    /**
+     * BUG 2 guard: true while the newly selected chat is still loading
+     * (messages/members). When true the header must not render the stale
+     * subtitle/typing of the previous chat — it renders a skeleton instead.
+     * Wired by ChatWorkspace (see integration note below), defaults to false
+     * so existing usages keep working.
+     */
+    loading?: boolean
+    /**
+     * BUG 3 guard: false hides the call/broadcast button (phone/broadcast in
+     * convActions). Defaults to true so nothing breaks before ChatWorkspace
+     * passes the real permission.
+     */
+    canBroadcast?: boolean
   /**
    * Owner of the avatar, so the fullscreen viewer can lazy-load the photo
    * history. Both stay optional on purpose: the header is rendered by
@@ -22,7 +37,17 @@ const props = defineProps<{
    */
   ownerId?: string
   ownerKind?: 'user' | 'chat'
-}>()
+  /**
+   * Saved Messages self-chat (backend chat kind 'saved'). When true the header
+   * renders the bookmark badge instead of the "S" letter, shows an empty
+   * subtitle (never "1 participants") and the peer block is not clickable
+   * (no info panel for saved). Wire as
+   * `:is-saved="selectedChat?.kind === 'saved'"`.
+   */
+  isSaved?: boolean
+  }>(),
+  { loading: false, canBroadcast: true, isSaved: false },
+)
 
 const emit = defineEmits<{
   openInfo: []
@@ -48,6 +73,12 @@ function previewAvatar(event: MouseEvent) {
     ownerId: props.ownerId,
     ownerKind: props.ownerKind,
   })
+}
+
+/** Saved Messages has no info panel: the header peer block is inert. */
+function onPeerClick() {
+  if (props.isSaved) return
+  emit('openInfo')
 }
 </script>
 
@@ -76,14 +107,15 @@ function previewAvatar(event: MouseEvent) {
         </button>
         <div
           class="convPeer"
-          role="button"
-          tabindex="0"
-          @click="emit('openInfo')"
-          @keydown.enter.prevent="emit('openInfo')"
-          @keydown.space.prevent="emit('openInfo')"
+          :class="{ noInfo: isSaved }"
+          :role="isSaved ? undefined : 'button'"
+          :tabindex="isSaved ? undefined : 0"
+          @click="onPeerClick"
+          @keydown.enter.prevent="onPeerClick"
+          @keydown.space.prevent="onPeerClick"
         >
           <button
-            v-if="avatarSrc"
+            v-if="avatarSrc && !isSaved"
             type="button"
             class="convAvatarWrap convAvatarBtn"
             :data-src="avatarSrc"
@@ -92,13 +124,20 @@ function previewAvatar(event: MouseEvent) {
           >
             <img class="convAvatarImg" :src="avatarSrc" alt="" />
           </button>
+          <div v-else-if="isSaved" class="convAvatarFallback convAvatarSaved" aria-hidden="true">
+            <svg class="convSavedGlyph" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" /></svg>
+          </div>
           <div v-else class="convAvatarFallback" :style="{ background: avatarColorFor(title) }">{{ avatarText }}</div>
           <div class="convMeta">
             <div class="convTitle">{{ title }}</div>
-            <div v-if="typingLabel" class="convSubtitle convTyping">
+            <div v-if="!loading && typingLabel && !isSaved" class="convSubtitle convTyping">
               <TypingIndicator />
               <span>{{ typingLabel }}</span>
             </div>
+            <div v-else-if="loading" class="convSubtitle convSubtitleSkeleton" aria-hidden="true">
+              <span class="convSkeletonBar" />
+            </div>
+            <div v-else-if="isSaved" class="convSubtitle" aria-hidden="true" />
             <div v-else class="convSubtitle">{{ subtitle }}</div>
           </div>
         </div>
@@ -106,6 +145,7 @@ function previewAvatar(event: MouseEvent) {
 
       <div class="convActions">
         <button
+          v-if="canBroadcast"
           type="button"
           class="convActionBtn"
           :aria-label="streamMode ? t('call.start_stream', undefined, 'Start stream') : t('call.start_audio', undefined, 'Start audio call')"
@@ -152,6 +192,10 @@ function previewAvatar(event: MouseEvent) {
   min-width: 0;
   flex: 1 1 auto;
   cursor: pointer;
+}
+
+.convPeer.noInfo {
+  cursor: default;
 }
 
 .convBackBtn {
@@ -205,6 +249,33 @@ function previewAvatar(event: MouseEvent) {
   color: var(--accent);
 }
 
+.convSubtitleSkeleton {
+  display: flex;
+  align-items: center;
+  min-height: 16px;
+}
+
+.convSkeletonBar {
+  display: inline-block;
+  width: 120px;
+  max-width: 40vw;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-soft-hover, var(--surface-soft));
+  opacity: 0.7;
+  animation: convSkeletonPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes convSkeletonPulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
 .convAvatarImg {
   width: 100%;
   height: 100%;
@@ -220,6 +291,19 @@ function previewAvatar(event: MouseEvent) {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -.02em;
+}
+
+/* Saved Messages badge: same gradient/glyph as the chat list row
+ * (ChatSidebarChatsPane .cpAvatarSaved). Inline SVG on purpose —
+ * mdi-bookmark-outline is NOT in the MDI subset font, a v-icon would
+ * render blank. Shown even when an avatar url exists, like in the list. */
+.convAvatarSaved {
+  background: linear-gradient(135deg, #4a90d9 0%, #2f6cb3 100%);
+  color: #fff;
+}
+
+.convSavedGlyph {
+  display: block;
 }
 
 .convActions {

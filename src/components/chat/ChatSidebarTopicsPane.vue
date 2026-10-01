@@ -362,15 +362,15 @@ const menuCanMute = computed(() => Boolean(menuChat.value))
 .tpList { overflow:auto; padding:8px 10px 12px; min-height:0; scrollbar-width:none; -ms-overflow-style:none; }
 .tpList::-webkit-scrollbar { width:0; height:0; display:none; }
 .tpPlaceholder { margin:8px 6px; color:var(--text-muted); font-size:12px; }
-.tpHash { display:inline-block; width:1.05em; color:var(--text-muted); }
-.tpVoiceIcon { color: var(--accent); width:auto; margin-right:2px; }
+.tpHash { display:inline-block; width:1.05em; color:var(--text-muted); flex:none; margin-right:0; }
+.tpVoiceIcon { color: var(--accent); width:auto; margin-right:0; }
 .tpTopLine.voice .tpName { color: color-mix(in srgb, var(--accent) 70%, var(--text)); }
 .tpRow { width:100%; margin:0 0 6px; padding:11px 12px; border:0; border-radius:14px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
 .tpRow:hover { background:var(--surface-soft-hover); }
 .tpRow.selected { background: color-mix(in srgb, var(--accent) 26%, rgba(0,0,0,.18)); }
 .tpTopLine,.tpBottomLine { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .tpBottomLine { margin-top:4px; }
-.tpName { min-width:0; font-size:14px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tpName { display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 auto; font-size:14px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tpMeta { flex:none; color:var(--text-muted); font-size:12px; }
 .tpPreview { min-width:0; color:var(--text-muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tpUnread { flex:none; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--accent); color:#fff; font-size:11px; font-weight:800; line-height:18px; text-align:center; }

@@ -10,6 +10,11 @@ type CallEventPayload = { callID: string; chatID: string; kind: string; startedB
 export type ProfileUpdatePayload = { userID: string; user: SearchUserResult }
 export type TypingPayload = { chatID: string; userID: string }
 export type ChatUpdatedPayload = { chatID: string; chat: Record<string, unknown>; updatedAt?: string }
+export type MessageReactionPayload = {
+  chatID: string
+  messageID: string
+  reactions: Array<{ emoji: string; count: number; user_ids: string[] }>
+}
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -25,6 +30,7 @@ type UseChatRealtimeArgs = {
   onChatEvent?: (payload: { type: string; chatID: string; raw: unknown }) => void
   onMessageDeleted: (messageID: string, chatID: string) => void
   onMessageStatus: (messageID: string, chatID: string, status: StatusPayload) => void
+  onMessageReaction?: (payload: MessageReactionPayload) => void
   onMessageCreated?: (payload: MessageCreatedPayload) => void
   onNotificationMessageCreated?: (payload: MessageCreatedPayload) => void
   onPresenceUpdate?: (payload: PresencePayload) => void
@@ -285,6 +291,35 @@ function readChatUpdated(payload: unknown): ChatUpdatedPayload | null {
   return { chatID, chat, updatedAt }
 }
 
+function readMessageReaction(payload: unknown): MessageReactionPayload | null {
+  const root = asObject(payload)
+  if (!root) return null
+  const nested = asObject(root.event) ?? asObject(root.payload) ?? asObject(root.data) ?? root
+  const src = { ...root, ...nested } as Record<string, unknown>
+  const chatID = String(src.chat_id || src.chatId || '').trim()
+  const messageID = String(src.message_id || src.messageId || '').trim()
+  if (!chatID || !messageID) return null
+  const rawReactions = Array.isArray(src.reactions) ? (src.reactions as unknown[]) : []
+  const reactions = rawReactions
+    .map((item) => {
+      const node = asObject(item)
+      if (!node) return null
+      const emoji = String(node.emoji || '').trim()
+      if (!emoji) return null
+      const userIdsRaw = Array.isArray(node.user_ids)
+        ? node.user_ids
+        : Array.isArray(node.userIds)
+          ? node.userIds
+          : []
+      const user_ids = (userIdsRaw as unknown[]).map((id) => String(id || '').trim()).filter(Boolean)
+      const countRaw = Number(node.count)
+      const count = Number.isFinite(countRaw) && countRaw > 0 ? Math.floor(countRaw) : user_ids.length
+      return { emoji, count, user_ids }
+    })
+    .filter(Boolean) as Array<{ emoji: string; count: number; user_ids: string[] }>
+  return { chatID, messageID, reactions }
+}
+
 export function useChatRealtime(args: UseChatRealtimeArgs) {
   const runtime: RealtimeRuntime = {
     socket: null,
@@ -392,8 +427,25 @@ export function useChatRealtime(args: UseChatRealtimeArgs) {
       if ((type === 'chat.created' || type === 'chat.updated' || type === 'chat.member_added' || type === 'chat.member_removed') && chatID && args.onChatEvent) {
         args.onChatEvent({ type, chatID, raw: payload })
       }
-      if ((type === 'message.created' || type === 'message.updated' || type === 'message.reaction' || type === 'message.deleted') && chatID) {
+      if ((type === 'message.created' || type === 'message.updated' || type === 'message.deleted') && chatID) {
         scheduleMessagesReload(chatID)
+      }
+      // Reactions carry their own authoritative payload (see
+      // ToggleMessageReaction publish). Patching in place avoids a full
+      // messages reload, which remounts MessageMedia, resets its lazy-observer
+      // state and re-renders skeletons — the "reaction kills the photo" shape.
+      // The patch itself lives in actions.message (which owns rawMessages);
+      // here we only broadcast, never reload.
+      if (type === 'message.reaction') {
+        const reaction = readMessageReaction(payload)
+        if (reaction) {
+          if (args.onMessageReaction) args.onMessageReaction(reaction)
+          try {
+            window.dispatchEvent(new CustomEvent('combox:message-reaction', { detail: reaction }))
+          } catch {
+            // event bus is best-effort
+          }
+        }
       }
       if (type === 'message.created' && args.onMessageCreated) {
         const created = readMessageCreated(payload)

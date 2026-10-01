@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from '../../i18n/i18n'
 import { useToast } from '../../composables/useToast'
 import { APP_SITE_URL, APP_VERSION } from './aboutMeta'
@@ -10,6 +10,36 @@ const { t } = useI18n()
 const toast = useToast()
 
 const loggingOut = ref(false)
+
+// R6: live connection flag. wsConnected lives in the chat workspace runtime
+// and is not exported globally, while presence is per-peer — so this row
+// subscribes to browser online/offline (navigator.onLine), which fires when
+// the socket's network drops.
+const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
+
+function handleOnline(): void {
+  isOnline.value = true
+}
+
+function handleOffline(): void {
+  isOnline.value = false
+}
+
+const serverStatusText = computed(() =>
+  isOnline.value
+    ? t('settings.online', undefined, 'Online')
+    : t('presence.offline', undefined, 'Offline'),
+)
+
+onMounted(() => {
+  window.addEventListener('online', handleOnline)
+  window.addEventListener('offline', handleOffline)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('online', handleOnline)
+  window.removeEventListener('offline', handleOffline)
+})
 
 async function handleLogout(): Promise<void> {
   if (loggingOut.value) return
@@ -48,15 +78,14 @@ async function handleLogout(): Promise<void> {
       <div class="infoRow">
         <div class="infoRow__icon"><v-icon icon="mdi-cloud-check-outline" size="18" /></div>
         <div class="infoRow__body">
-          <div class="infoRow__value">{{ t('settings.status_online', undefined, 'Active & running') }}</div>
+          <div class="infoRow__value">{{ serverStatusText }}</div>
           <div class="infoRow__label">{{ t('settings.server_status', undefined, 'Server status') }}</div>
         </div>
       </div>
       <div class="infoRow">
         <div class="infoRow__icon"><v-icon icon="mdi-incognito" size="18" /></div>
         <div class="infoRow__body">
-          <div class="infoRow__value">{{ t('settings.privacy_first', undefined, 'Private by design') }}</div>
-          <div class="infoRow__label">{{ t('settings.privacy_first_hint', undefined, 'Messages stay on your device') }}</div>
+          <div class="infoRow__value">{{ t('settings.privacy_first', undefined, 'Private by design: all messages and media are encrypted') }}</div>
         </div>
       </div>
     </div>

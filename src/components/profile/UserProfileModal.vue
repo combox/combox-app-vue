@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
+  blockUser,
   ComboxClient,
   getCurrentUser,
   getProfileSettings,
@@ -14,6 +15,7 @@ import {
   type PresenceItem,
   type SavedTrack,
 } from 'combox-api'
+import { createReport } from '../../../../combox-api/src/reports'
 import { useI18n } from '../../i18n/i18n'
 import { useToast } from '../../composables/useToast'
 import { normalizeAvatarSrc } from '../../utils/avatar'
@@ -73,11 +75,24 @@ const playlistTracks = computed<SavedTrack[]>(() => {
 const playlistTitle = computed(() => (user.value?.playlist_title || '').trim())
 const playlistIsPublic = computed(() => user.value?.playlist_is_public !== false)
 const hasPlaylistTracks = computed(() => playlistTracks.value.length > 0)
+// O1: empty bio/playlist never render in preview (own or foreign).
+// Bio is gated by v-if="bio" in the template; the playlist block needs
+// tracks>0 in both modes (own view no longer shows the empty placeholder).
 const showPlaylist = computed(() => {
   if (loading.value || !user.value) return false
+  if (!hasPlaylistTracks.value) return false
   if (isOwnProfile.value) return true
-  return playlistIsPublic.value && hasPlaylistTracks.value
+  return playlistIsPublic.value
 })
+
+const reportOpen = ref(false)
+const reportReason = ref('')
+const reportBusy = ref(false)
+const reportError = ref('')
+const reportSent = ref(false)
+const blockBusy = ref(false)
+const blockDone = ref(false)
+const showModeration = computed(() => !isOwnProfile.value && Boolean(resolvedUserID.value))
 
 function formatTrackTime(seconds: number): string {
   const safe = Math.max(0, Math.round(seconds || 0))
@@ -318,6 +333,68 @@ function onAvatarClick(): void {
   })
 }
 
+function resetModeration(): void {
+  reportOpen.value = false
+  reportReason.value = ''
+  reportBusy.value = false
+  reportError.value = ''
+  reportSent.value = false
+  blockBusy.value = false
+  blockDone.value = false
+}
+
+function toggleReportForm(): void {
+  if (reportBusy.value) return
+  reportError.value = ''
+  reportOpen.value = !reportOpen.value
+}
+
+async function submitReport(): Promise<void> {
+  const targetID = resolvedUserID.value.trim()
+  const reason = reportReason.value.trim()
+  if (!targetID || reportBusy.value) return
+  if (!reason) {
+    reportError.value = t('profile.report_reason_required', undefined, 'Please describe the reason')
+    return
+  }
+  if (Array.from(reason).length > 2000) {
+    reportError.value = t('profile.report_reason_too_long', undefined, 'Reason must be 2000 characters or fewer')
+    return
+  }
+  reportBusy.value = true
+  reportError.value = ''
+  try {
+    await createReport({ target_type: 'user', target_id: targetID, reason })
+    reportSent.value = true
+    reportOpen.value = false
+    reportReason.value = ''
+    toast.success(t('profile.report_sent', undefined, 'Report sent. Thank you!'))
+  } catch (error) {
+    reportError.value = error instanceof Error && error.message.trim()
+      ? error.message.trim()
+      : t('profile.report_failed', undefined, 'Could not send the report')
+  } finally {
+    reportBusy.value = false
+  }
+}
+
+async function blockThisUser(): Promise<void> {
+  const targetID = resolvedUserID.value.trim()
+  if (!targetID || blockBusy.value || blockDone.value) return
+  blockBusy.value = true
+  try {
+    await blockUser(targetID)
+    blockDone.value = true
+    toast.success(t('profile.blocked', undefined, 'User blocked'))
+  } catch (error) {
+    toast.error(error instanceof Error && error.message.trim()
+      ? error.message.trim()
+      : t('profile.block_failed', undefined, 'Could not block the user'))
+  } finally {
+    blockBusy.value = false
+  }
+}
+
 function onKeydown(event: KeyboardEvent): void {
   if (!profileModalTarget.value) return
   if (event.key === 'Escape') {
@@ -350,6 +427,7 @@ watch(
     if (next) {
       previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
       void nextTick(() => dialogEl.value?.focus())
+      resetModeration()
       void load()
     } else {
       previouslyFocused?.focus?.()
@@ -359,6 +437,7 @@ watch(
       user.value = null
       presence.value = null
       directChat.value = null
+      resetModeration()
     }
   },
   { immediate: true },
@@ -433,6 +512,45 @@ document.addEventListener('keydown', onKeydown)
             </button>
           </div>
 
+          <div v-if="showModeration" class="pfActions pfActionsSecond">
+            <button type="button" class="pfAction pfActionDanger" :disabled="reportBusy" @click="toggleReportForm">
+              <v-icon icon="mdi-flag-outline" size="20" />
+              <span>{{ t('profile.report', undefined, 'Report') }}</span>
+            </button>
+            <button
+              type="button"
+              class="pfAction pfActionDanger"
+              :disabled="blockBusy || blockDone"
+              @click="blockThisUser"
+            >
+              <v-icon icon="mdi-account-cancel-outline" size="20" />
+              <span>{{ blockDone ? t('profile.blocked', undefined, 'Blocked') : t('profile.block', undefined, 'Block') }}</span>
+            </button>
+          </div>
+
+          <div v-if="showModeration && reportOpen" class="pfReport">
+            <label class="pfInfoLabel" for="pfReportReason">{{ t('profile.report_reason', undefined, 'Reason') }}</label>
+            <textarea
+              id="pfReportReason"
+              v-model="reportReason"
+              class="pfReportInput"
+              rows="3"
+              maxlength="2000"
+              :placeholder="t('profile.report_reason_placeholder', undefined, 'Why are you reporting this user?')"
+              :disabled="reportBusy"
+            />
+            <div v-if="reportError" class="pfReportError">{{ reportError }}</div>
+            <div v-if="reportSent" class="pfReportOk">{{ t('profile.report_sent', undefined, 'Report sent. Thank you!') }}</div>
+            <div class="pfReportActions">
+              <button type="button" class="pfReportBtn" :disabled="reportBusy" @click="toggleReportForm">
+                {{ t('common.cancel', undefined, 'Cancel') }}
+              </button>
+              <button type="button" class="pfReportBtn pfReportBtnPrimary" :disabled="reportBusy || !reportReason.trim()" @click="submitReport">
+                {{ reportBusy ? t('common.sending', undefined, 'Sending…') : t('profile.report_send', undefined, 'Send report') }}
+              </button>
+            </div>
+          </div>
+
           <div v-if="phone || username || bio || showBirthday" class="pfInfo">
             <div v-if="phone" class="pfInfoRow">
               <span class="pfInfoLabel">{{ t('profile.phone', undefined, 'Phone') }}</span>
@@ -458,10 +576,7 @@ document.addEventListener('keydown', onKeydown)
               <span class="pfPlaylistTitle">{{ playlistTitle || t('chat.playlist', undefined, 'Playlist') }}</span>
               <span class="pfPlaylistCount">{{ playlistTracks.length }}</span>
             </div>
-            <div v-if="playlistTracks.length === 0" class="pfPlaylistEmpty">
-              {{ t('chat.playlist_empty', undefined, 'No saved tracks yet') }}
-            </div>
-            <div v-else class="pfTrackList">
+            <div class="pfTrackList">
               <div v-for="track in playlistTracks" :key="track.id" class="pfTrackItem">
                 <span class="pfTrackMain">
                   <span class="pfTrackTitle">{{ track.title }}</span>
@@ -623,6 +738,68 @@ document.addEventListener('keydown', onKeydown)
 }
 .pfAction:disabled {
   opacity: 0.45;
+  cursor: default;
+}
+.pfActionsSecond {
+  margin-top: -4px;
+}
+.pfActionDanger {
+  color: #ef4444;
+}
+
+.pfReport {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+.pfReportInput {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: 0;
+}
+.pfReportError {
+  font-size: 12px;
+  color: #ef4444;
+}
+.pfReportOk {
+  font-size: 12px;
+  color: var(--accent);
+}
+.pfReportActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.pfReportBtn {
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pfReportBtnPrimary {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+}
+.pfReportBtn:disabled {
+  opacity: 0.5;
   cursor: default;
 }
 

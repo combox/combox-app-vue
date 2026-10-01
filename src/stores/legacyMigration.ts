@@ -43,10 +43,13 @@ export function resolveLegacyMigration(): void {
 /**
  * Global 403 interceptor helper. Returns true when `error` is the API's
  * "bind an email first" rejection — the modal is opened and the caller must
- * NOT show its own error text. Returns false for anything else.
+ * NOT show its own error text. Returns false for anything else. The optional
+ * `email` pre-fills step 1 only when it really is an email (legacy nick
+ * logins pass '' so the modal starts empty instead of echoing the nick).
  */
-export function notifyLegacyMigration(error: unknown): boolean {
+export function notifyLegacyMigration(error: unknown, email = ''): boolean {
   if (!isEmailBindingRequired(error)) return false
+  if (email && !migrationEmail.value) migrationEmail.value = email
   migrationRequired.value = true
   return true
 }

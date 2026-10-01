@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ComboxClient, getCurrentUser, normalizeBirthDate, type AuthUser, type ProfileUpdateInput } from 'combox-api'
 import { useI18n } from '../../i18n/i18n'
 import { useToast } from '../../composables/useToast'
@@ -48,6 +48,26 @@ const initials = computed(() => {
 })
 
 const avatarSrc = computed(() => normalizeAvatarSrc(profile.value?.avatar_data_url || ''))
+
+// R6: live connection flag. wsConnected lives in the chat workspace runtime
+// (useChatWorkspace.runtime.ts) and is not exported globally, while presence
+// is per-peer — so this header subscribes to browser online/offline
+// (navigator.onLine), which fires when the socket's network drops.
+const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
+
+function handleOnline(): void {
+  isOnline.value = true
+}
+
+function handleOffline(): void {
+  isOnline.value = false
+}
+
+const statusText = computed(() =>
+  isOnline.value
+    ? t('settings.online', undefined, 'Online')
+    : t('presence.offline', undefined, 'Offline'),
+)
 
 const avatarInput = ref<HTMLInputElement | null>(null)
 
@@ -194,6 +214,13 @@ async function removeAvatar(): Promise<void> {
 
 onMounted(() => {
   void load()
+  window.addEventListener('online', handleOnline)
+  window.addEventListener('offline', handleOffline)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('online', handleOnline)
+  window.removeEventListener('offline', handleOffline)
 })
 </script>
 
@@ -229,7 +256,7 @@ onMounted(() => {
       <div class="tgHeroMain">
         <div class="tgHeroName">{{ loading ? '…' : displayName }}</div>
         <div class="tgHeroSub">@{{ profile?.username || 'username' }}</div>
-        <div class="tgHeroStatus">{{ t('settings.status_online', undefined, 'Active & running') }}</div>
+        <div class="tgHeroStatus" :class="{ isOffline: !isOnline }">{{ statusText }}</div>
       </div>
       <button
         v-if="avatarSrc"
@@ -305,7 +332,10 @@ onMounted(() => {
             <v-text-field v-model="draftBirthday" type="date" :label="t('settings.birth_date', undefined, 'Birth date')" variant="outlined" rounded="xl" class="tgDateField" :hint="t('settings.tg.account.birthday_hint', undefined, 'Pick a date from the calendar. Empty clears it.')" persistent-hint autocomplete="bday" />
           </template>
           <template v-else>
-            <v-textarea v-model="draftBio" :label="t('settings.bio', undefined, 'Bio')" variant="outlined" rounded="xl" rows="2" maxlength="70" counter="70" :hint="t('settings.bio_hint', undefined, 'A short line about yourself')" persistent-hint />
+            <!-- NOTE: v-textarea is NOT registered in src/plugins/vuetify.ts (only VTextField is),
+              so <v-textarea> renders as an unknown element = empty dialog with just title + buttons.
+              vuetify.ts is out of scope, so the bio field uses the registered v-text-field. -->
+            <v-text-field v-model="draftBio" :label="t('settings.bio', undefined, 'Bio')" variant="outlined" rounded="xl" maxlength="70" counter="70" :hint="t('settings.bio_hint', undefined, 'A short line about yourself')" persistent-hint autocomplete="off" />
           </template>
 
           <div class="tgModalActions">

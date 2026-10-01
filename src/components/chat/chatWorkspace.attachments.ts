@@ -1,4 +1,4 @@
-import { type MessageItem } from 'combox-api'
+import { type MessageItem, invalidateAttachmentCache } from 'combox-api'
 import type { Ref } from 'vue'
 import type { AttachmentView } from './chatWorkspace.types'
 
@@ -16,9 +16,13 @@ type AttachmentPayload = {
   }
 }
 
-// Playback URLs are presigned and expire (2h), previews even sooner (15m), so a
-// hydrated entry must be refreshed instead of trusted for the whole session.
-const URL_TTL_MS = 30 * 60 * 1000
+// Playback URLs are presigned for 2h, but previews only for 15m (see
+// media/service.go: preview 15m, playback 2h). combox-api also caches lookups
+// for 10m, so a cached entry can already carry a ~10m-old presign. A 30m
+// frontend TTL therefore serves expired previews (15m) while thinking they are
+// fresh — the "photo never loads / dies after a while" shape. Keep the TTL
+// well below the preview TTL so refresh happens before expiry.
+const URL_TTL_MS = 10 * 60 * 1000
 // A failed lookup is retried after a short cool-down rather than being cached
 // as an empty entry forever (that was the "media never loads again until F5").
 const FAILURE_RETRY_MS = 10 * 1000
@@ -65,6 +69,10 @@ function isUsable(entry: AttachmentView | undefined, now: number): boolean {
 function needsRefresh(entry: AttachmentView | undefined, now: number): boolean {
   if (!entry) return true
   if (!entry.url) return now - (entry.failedAt || 0) >= FAILURE_RETRY_MS
+  // A refresh that just failed must cool down instead of hammering the backend
+  // on every reaction-triggered reload; the previous (still usable) URL stays
+  // on screen meanwhile.
+  if (entry.failedAt && now - entry.failedAt < FAILURE_RETRY_MS) return false
   return now - (entry.fetchedAt || 0) >= URL_TTL_MS
 }
 
@@ -105,6 +113,16 @@ export async function hydrateAttachmentURLs(
       }
       const request = (async () => {
         try {
+          // Bypass the combox-api 10m lookup cache: it can hand back a presign
+          // minted up to 10m ago, which makes a 15m preview expire ~5m after
+          // we store it while we still consider it fresh. Hydration is already
+          // debounced by needsRefresh + attachmentRequests, so a fresh read
+          // here is cheaper than serving an expired preview.
+          try {
+            invalidateAttachmentCache(id)
+          } catch {
+            // cache bypass is best-effort; a fresh read still follows
+          }
           const payload = await withTimeout(getAttachment(id), REQUEST_TIMEOUT_MS)
           urlsByAttachment.value = {
             ...urlsByAttachment.value,

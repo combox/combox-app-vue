@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from '../../i18n/i18n'
 import AudioPlayer from './AudioPlayer.vue'
 import type { ResolvedAttachment } from './chatTypes'
@@ -63,10 +63,26 @@ const numericHeight = () => (props.attachment.height > 0 ? props.attachment.heig
 
 const lockedDims = ref<{ width: number; height: number }>({ width: numericWidth() || 0, height: numericHeight() || 0 })
 
+// The id identifies the message attachment; width/height arrive later via
+// hydration (urlsByAttachment) for tokens minted before the server knew the
+// mime. Watching only the id leaves lockedDims at 0x0 forever (giant
+// letterboxing) and — worse — a file→image kind flip after hydration never
+// (re-)observes the lazy queue (see observeImageIfNeeded below), so the image
+// stays at isNearViewport=false (skeleton) forever: the "reaction kills media"
+// shape (a WS reload + hydrate flips kind after mount).
+const prevAttachmentId = ref(props.attachment.id)
 watch(
-  () => props.attachment.id,
-  () => {
-    lockedDims.value = { width: numericWidth() || 0, height: numericHeight() || 0 }
+  () => [props.attachment.id, props.attachment.width, props.attachment.height] as const,
+  ([nextId, nextW, nextH]) => {
+    if (nextId !== prevAttachmentId.value) {
+      prevAttachmentId.value = nextId
+      lockedDims.value = { width: (nextW > 0 ? nextW : 0), height: (nextH > 0 ? nextH : 0) }
+      return
+    }
+    const current = lockedDims.value
+    const width = nextW > 0 ? nextW : current.width
+    const height = nextH > 0 ? nextH : current.height
+    if (width !== current.width || height !== current.height) lockedDims.value = { width, height }
   },
   { immediate: true },
 )
@@ -143,28 +159,65 @@ function onVisibilityChange() {
   pageVisible.value = document.visibilityState === 'visible'
 }
 
+function stopImageObserver() {
+  if (cleanupVisibility) {
+    cleanupVisibility()
+    cleanupVisibility = null
+  }
+}
+
+function observeImageIfNeeded() {
+  // Only images use the lazy queue. Other kinds render immediately and must
+  // not retain a stale observer. Crucially, an attachment whose token arrived
+  // without mime/kind (legacy / cache-rebuilt, see chatUtils.toViewMessage)
+  // mounts as kind='file' (no observer) and flips to kind='image' only after
+  // hydrate fills filename/mime — a WS reload (e.g. message.reaction echo)
+  // triggers exactly this flip after mount. Without re-observing here the new
+  // image button keeps isNearViewport=false forever (skeleton, never loads):
+  // the permanent "reaction kills media" shape that survives even after the
+  // reaction is removed (and shows as "loads a second from cache, then dies"
+  // on refresh: cache renders file tile, server+hydrate flips to unobserved
+  // image).
+  if (props.attachment.kind !== 'image') {
+    stopImageObserver()
+    return
+  }
+  if (!rootEl.value) return
+  if (cleanupVisibility) return
+  cleanupVisibility = mediaQueue.observe(
+    {
+      target: rootEl.value,
+      load: () => {
+        isNearViewport.value = true
+        scheduleFullImageLoad()
+      },
+    },
+    (visible) => {
+      if (visible === isNearViewport.value) return
+      isNearViewport.value = visible
+      if (visible) scheduleFullImageLoad()
+    },
+  )
+}
+
 onMounted(() => {
   document.addEventListener('visibilitychange', onVisibilityChange)
-
-  if (props.attachment.kind === 'image') {
-    if (rootEl.value) {
-      cleanupVisibility = mediaQueue.observe(
-        {
-          target: rootEl.value,
-          load: () => {
-            isNearViewport.value = true
-            scheduleFullImageLoad()
-          },
-        },
-        (visible) => {
-          if (visible === isNearViewport.value) return
-          isNearViewport.value = visible
-          if (visible) scheduleFullImageLoad()
-        },
-      )
-    }
-  }
+  observeImageIfNeeded()
 })
+
+watch(
+  () => props.attachment.kind,
+  () => {
+    // The image button (rootEl) mounts only after the kind flip renders, so
+    // defer one tick for the ref to exist before observing.
+    if (props.attachment.kind !== 'image') {
+      stopImageObserver()
+      isNearViewport.value = false
+      return
+    }
+    void nextTick(() => observeImageIfNeeded())
+  },
+)
 
 onBeforeUnmount(() => {
   destroyed = true
@@ -240,7 +293,6 @@ function videoSizeStyle() {
     v-else-if="isRoundVideo && attachment.url"
     :src="attachment.url"
     :poster="attachment.previewUrl"
-    :title="mediaTitle"
     :duration-ms="attachment.durationMs"
   />
 
@@ -249,10 +301,12 @@ function videoSizeStyle() {
     :src="attachment.url"
     :attachment-id="attachment.id"
     :poster="attachment.previewUrl"
+    :pending="!attachment.url"
     :title="mediaTitle"
     :duration-ms="attachment.durationMs"
     :waveform="attachment.waveform"
     :round="true"
+    :voice="attachment.voice"
   />
 
   <VideoPlayer
@@ -273,8 +327,12 @@ function videoSizeStyle() {
     <span class="media-placeholder-label">{{ attachment.filename || 'video' }}</span>
   </div>
 
+  <!-- BUG8: voice/round-flagged attachments render the waveform player even
+       when the mime/kind is still unknown (kind 'file' before hydration):
+       play + interactive waveform-seek + time, no text block (the player
+       itself hides text for voice). -->
   <AudioPlayer
-    v-else-if="attachment.kind === 'audio'"
+    v-else-if="attachment.kind === 'audio' || attachment.voice || attachment.round"
     :src="attachment.url"
     :attachment-id="attachment.id"
     :poster="attachment.previewUrl"

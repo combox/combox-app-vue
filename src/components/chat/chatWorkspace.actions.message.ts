@@ -10,6 +10,56 @@ import type { MessageStatus } from './chatWorkspace.types'
 import type { WorkspaceActionsInput } from './chatWorkspace.actions.shared'
 
 export function createMessageActions(input: WorkspaceActionsInput) {
+  // Foreign reaction echo (see useChatRealtime broadcast): patch reactions
+  // in place instead of reloading the whole feed. A full reloadMessages here
+  // replaces every MessageItem, re-runs hydration and remounts media
+  // observers — that is what made a photo vanish right after reacting.
+  // Own reactions are already applied from the toggle response below; this
+  // only handles echoes for any sender without touching attachments/URLs.
+  try {
+    const holder = window as unknown as { __comboxReactionListener?: boolean }
+    if (!holder.__comboxReactionListener) {
+      holder.__comboxReactionListener = true
+      window.addEventListener('combox:message-reaction', (event) => {
+        try {
+          const detail = (event as CustomEvent<{
+            chatID?: unknown
+            messageID?: unknown
+            reactions?: Array<{ emoji?: unknown; count?: unknown; user_ids?: unknown }>
+          }>).detail
+          const chatID = String(detail?.chatID || '').trim()
+          const messageID = String(detail?.messageID || '').trim()
+          if (!chatID || !messageID) return
+          if ((input.activeMessagesChatID.value || '').trim() !== chatID) return
+          const next = (Array.isArray(detail?.reactions) ? detail.reactions : [])
+            .map((item) => {
+              const emoji = String(item?.emoji || '').trim()
+              if (!emoji) return null
+              const userIdsRaw = Array.isArray(item?.user_ids) ? (item.user_ids as unknown[]) : []
+              const user_ids = userIdsRaw.map((id) => String(id || '').trim()).filter(Boolean)
+              const countRaw = Number(item?.count)
+              const count = Number.isFinite(countRaw) && countRaw > 0 ? Math.floor(countRaw) : user_ids.length
+              return { emoji, count, user_ids }
+            })
+            .filter(Boolean) as Array<{ emoji: string; count: number; user_ids: string[] }>
+          let changed = false
+          input.rawMessages.value = input.rawMessages.value.map((item) => {
+            if ((item.id || '').trim() !== messageID) return item
+            changed = true
+            return { ...item, reactions: next }
+          })
+          if (changed && input.activeMessagesChatID.value) {
+            writeJSON(`${MSG_CACHE_PREFIX}${input.activeMessagesChatID.value}`, input.rawMessages.value)
+          }
+        } catch {
+          // reaction patch is best-effort; the next full load will converge
+        }
+      })
+    }
+  } catch {
+    // event bus unavailable (SSR/tests) — reactions still work via toggle response
+  }
+
   async function sendDraft(draft: string) {
     let chatID = input.activeMessagesChatID.value
     const text = draft.trim()

@@ -237,6 +237,9 @@ export async function activate(track: ChatAudioTrack): Promise<boolean> {
   state.error = false
   state.visible = true
   state.playing = true
+  // BUG7b: expose the known duration instantly (API durationMs) so time never
+  // shows 0:00 until play; the <audio> loadedmetadata/durationchange refines it.
+  state.duration = merged.durationMs > 0 ? merged.durationMs / 1000 : 0
 
   // Start playback first: a stalled/expired metadata probe must never be able
   // to wedge the player in a "playing but silent" state.

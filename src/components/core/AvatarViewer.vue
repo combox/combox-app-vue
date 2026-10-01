@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { getCurrentUser, listChatPhotos, listUserPhotos, updateProfile } from 'combox-api'
+import { getAccessToken, getCurrentUser, listChatPhotos, listUserPhotos, updateProfile } from 'combox-api'
 import { useToast } from '../../composables/useToast'
 import { useI18n } from '../../i18n/i18n'
 import { avatarColorFor } from '../../utils/avatarColor'
 import { avatarPreviewTarget, closeAvatarPreview, type AvatarPhoto, type AvatarPreviewTarget } from '../../utils/avatarViewer'
+import ConfirmDialog from './ConfirmDialog.vue'
+import { useConfirm } from './useConfirm'
 
 const { t, locale } = useI18n()
 const toast = useToast()
@@ -12,8 +14,9 @@ const toast = useToast()
 type OpenTarget = Exclude<AvatarPreviewTarget, null>
 
 // Clamp so the popup menu never leaves the viewport (fixed positioning).
+// Four rows (set-as-main / copy / save-as / delete) fit in ~200px padding in.
 const MENU_WIDTH = 220
-const MENU_HEIGHT = 168
+const MENU_HEIGHT = 208
 
 // One gallery photo. `migrated` marks rows the boxchat ETL backfilled: their
 // `createdAt` is the migration moment, not the original install moment, so
@@ -32,6 +35,10 @@ const menuOpen = ref(false)
 const menuPos = ref({ x: 0, y: 0 })
 const copyBusy = ref(false)
 const setMainBusy = ref(false)
+const deleteBusy = ref(false)
+// Delete confirmation (shared ConfirmDialog/useConfirm pair, same wiring as
+// ChatFoldersBar): the dialog teleports to body above this overlay.
+const deleteConfirm = useConfirm()
 
 // Every lazy load carries a token: a newer open (or a close) invalidates the
 // previous request instead of letting it repaint a stale gallery.
@@ -62,6 +69,11 @@ const photoStyle = computed(() => (rotateDeg.value ? { transform: `rotate(${rota
 const canSetAsMain = computed(() => {
   if (setMainBusy.value || photos.value.length < 2 || activeIndex.value === 0) return false
   if (!currentSrc.value || target.value?.ownerKind !== 'user') return false
+  return isSelfOwner()
+})
+// The gallery belongs to the signed-in user themselves (user kind only).
+function isSelfOwner(): boolean {
+  if (target.value?.ownerKind !== 'user') return false
   try {
     const me = (getCurrentUser()?.id || '').trim()
     const owner = (target.value?.ownerId || '').trim()
@@ -69,6 +81,20 @@ const canSetAsMain = computed(() => {
   } catch {
     return false
   }
+}
+const isOwnUserGallery = computed(() => isSelfOwner())
+// "Delete" (danger row of the same popup menu): removes the CURRENTLY viewed
+// history photo. Seed rows opened without history ('preview' id, unsaved
+// drafts) have no server row and are never deletable. Own user galleries are
+// deletable by the owner; chat galleries are offered too (the server keeps
+// the owner/admin/moderator gate and answers 403 otherwise).
+const canDelete = computed(() => {
+  if (deleteBusy.value || !current.value) return false
+  const id = (current.value.id || '').trim()
+  if (!id || id === 'preview') return false
+  if (!target.value?.ownerId || !target.value?.ownerKind) return false
+  if (target.value.ownerKind === 'user') return isOwnUserGallery.value
+  return true
 })
 const setAsMainLabel = computed(() =>
   t('avatar_history.set_as_main', undefined, locale.value === 'ru' ? 'Сделать главной' : 'Set as main'),
@@ -361,6 +387,109 @@ async function setAsMain(): Promise<void> {
   }
 }
 
+// API base for the photo-history DELETE calls. The combox-api package owns
+// this inference (authUrl) but does not export it and exposes no photo
+// delete yet, so the viewer carries a local minimal copy instead of forking
+// the frozen package: env override first, the app.combox.local split second,
+// same-origin fallback otherwise.
+function photosApiBase(): string {
+  try {
+    const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+    const fromEnv = (env?.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '')
+    if (fromEnv) return fromEnv
+  } catch {
+    // import.meta.env is build-time: fall through to the location default.
+  }
+  if (typeof window !== 'undefined' && window.location.host.toLowerCase() === 'app.combox.local') {
+    return `${window.location.protocol}//api.combox.local/api/private/v1`
+  }
+  return '/api/private/v1'
+}
+
+// DELETE /users|chats/{ownerID}/photos/{photoID}. A 404 means the row is
+// already gone server-side: the local gallery still syncs to it. Anything
+// else non-OK throws for the failure toast.
+async function deletePhotoRow(ownerKind: 'user' | 'chat', ownerID: string, photoID: string): Promise<void> {
+  const token = getAccessToken()
+  if (!token) throw new Error('unauthorized')
+  const prefix = ownerKind === 'chat' ? 'chats' : 'users'
+  const url = `${photosApiBase()}/${prefix}/${encodeURIComponent(ownerID)}/photos/${encodeURIComponent(photoID)}`
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    cache: 'default',
+  })
+  if (response.ok) return
+  let code = ''
+  try {
+    const payload = (await response.json()) as { code?: string }
+    code = (payload?.code || '').trim()
+  } catch {
+    // Non-JSON error body: the status below is the signal.
+  }
+  if (response.status === 404) return
+  throw new Error(code || `delete_failed_${response.status}`)
+}
+
+async function askDeleteCurrent(): Promise<void> {
+  const photo = current.value
+  const owner = target.value
+  if (!photo || deleteBusy.value || !canDelete.value || !owner?.ownerId || !owner?.ownerKind) return
+  closeMenu()
+  const ok = await deleteConfirm.openConfirm({
+    title: t('avatar_history.delete_title', undefined, locale.value === 'ru' ? 'Удалить фото?' : 'Delete this photo?'),
+    text: t(
+      'avatar_history.delete_text',
+      undefined,
+      locale.value === 'ru'
+        ? 'Фото будет удалено из истории. Это действие нельзя отменить.'
+        : 'The photo will be removed from the history. This cannot be undone.',
+    ),
+    okLabel: t('common.delete', undefined, 'Delete'),
+    danger: true,
+  })
+  if (!ok) return
+  deleteBusy.value = true
+  try {
+    await deletePhotoRow(owner.ownerKind, owner.ownerId, photo.id)
+    const removedIndex = activeIndex.value
+    // Index 0 is the current main (same convention as canSetAsMain):
+    // deleting it must also clear the owner's avatar reference
+    // (removeAvatar flow: updateProfile with an empty string resets the
+    // column to NULL), otherwise the profile would keep pointing at a
+    // history-less object.
+    const wasMain = removedIndex === 0 && owner.ownerKind === 'user' && isOwnUserGallery.value
+    photos.value = photos.value.filter((item) => item.id !== photo.id)
+    if (wasMain) {
+      try {
+        await updateProfile({ avatar_data_url: '' })
+      } catch {
+        toast.error(
+          t(
+            'avatar_history.delete_main_failed',
+            undefined,
+            locale.value === 'ru'
+              ? 'Фото удалено из истории, но главную аватарку сбросить не удалось'
+              : 'Photo deleted, but the main avatar could not be reset',
+          ),
+        )
+      }
+    }
+    if (photos.value.length === 0) {
+      closeAvatarPreview()
+    } else {
+      activeIndex.value = clampIndex(Math.min(removedIndex, photos.value.length - 1), photos.value.length)
+    }
+    toast.success(t('avatar_history.deleted', undefined, locale.value === 'ru' ? 'Фото удалено' : 'Photo deleted'))
+  } catch {
+    toast.error(
+      t('avatar_history.delete_failed', undefined, locale.value === 'ru' ? 'Не удалось удалить фото' : 'Could not delete the photo'),
+    )
+  } finally {
+    deleteBusy.value = false
+  }
+}
+
 function onContentClick(): void {
   // Clicks on the photo zone / caption bar / thumbs / status bubble up here
   // with propagation stopped (the viewer itself must stay open). The only
@@ -571,7 +700,28 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
             <v-icon icon="mdi-download" size="16" />
             <span>{{ t('avatar_history.save_as', undefined, 'Save as…') }}</span>
           </button>
+          <button
+            v-if="canDelete"
+            type="button"
+            class="avMenuItem avMenuItemDanger"
+            role="menuitem"
+            :disabled="deleteBusy || !currentSrc"
+            @click="askDeleteCurrent"
+          >
+            <v-icon icon="mdi-delete-outline" size="16" />
+            <span>{{ t('avatar_history.delete', undefined, locale === 'ru' ? 'Удалить' : 'Delete') }}</span>
+          </button>
         </div>
+
+        <ConfirmDialog
+          :open="deleteConfirm.dialog.open"
+          :title="deleteConfirm.dialog.title"
+          :text="deleteConfirm.dialog.text"
+          :ok-label="deleteConfirm.dialog.okLabel"
+          :danger="deleteConfirm.dialog.danger"
+          @confirm="deleteConfirm.acceptConfirm"
+          @cancel="deleteConfirm.dismissConfirm"
+        />
       </div>
     </transition>
   </Teleport>
@@ -598,22 +748,31 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
   align-items: center;
   justify-content: center;
   padding: 56px 72px 8px;
+  overflow: hidden;
 }
 
+/* Contain audit: the zone IS the photo area. It fills the figure (which the
+   flex column already sized to viewport minus close/nav padding, caption
+   bar, actions, status and thumbs), so the photo's 100% caps resolve against
+   the real box — no JS measuring, no ResizeObserver, no magic viewport
+   subtractions that drift per aspect ratio. object-fit:contain then keeps
+   the WHOLE photo visible, letterboxing instead of cropping. */
 .avPhotoZone {
   display: flex;
   align-items: center;
   justify-content: center;
-  max-width: min(100%, calc(100vw - 24px));
-  max-height: min(100%, calc(100dvh - 24px));
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
 }
 
 .avPhoto {
-  max-width: min(100%, calc(100vw - 24px));
-  max-height: min(100%, calc(100dvh - 250px));
+  max-width: 100%;
+  max-height: 100%;
   width: auto;
   height: auto;
   object-fit: contain;
@@ -627,8 +786,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
 
 /* 90°/270° rotation swaps the bounding box, so the width cap must come from
    the viewport height and vice versa — otherwise a rotated panorama escapes
-   the screen. Both caps stay viewport-absolute, so the photo can NEVER
-   leave the viewport whatever its size or rotation. */
+   the screen. min() keeps the zone (100%) binding on the axis where it is
+   tighter, so the photo can NEVER leave the viewport whatever its size or
+   rotation. overflow hidden above clips nothing when the math holds; it only
+   guards sub-pixel rounding during the rotate transition. */
 .avPhoto.is-rotated {
   max-width: min(100%, calc(100dvh - 270px));
   max-height: min(100%, calc(100vw - 48px));
@@ -851,6 +1012,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
   cursor: default;
 }
 
+.avMenuItemDanger {
+  color: #ff9d9d;
+}
+
+.avMenuItemDanger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.14);
+}
+
 .avFade-enter-active,
 .avFade-leave-active {
   transition: opacity 0.16s ease;
@@ -863,7 +1032,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
 
 @media (max-width: 720px) {
   .avFigure {
-    padding: 52px 8px 4px;
+    padding: 48px 8px 4px;
   }
   .avNavPrev {
     left: 6px;

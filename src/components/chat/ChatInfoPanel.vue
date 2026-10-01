@@ -68,7 +68,7 @@ const toast = useToast()
 
 type InfoTab = 'media' | 'files' | 'links' | 'members' | 'manage'
 
-const activeTab = ref<InfoTab>(props.selectedChat?.is_direct ? 'media' : 'members')
+const activeTab = ref<InfoTab>(props.selectedChat?.is_direct || (props.selectedChat?.kind || '').trim() === 'saved' ? 'media' : 'members')
 const manageMembers = ref(false)
 const manageQuery = ref('')
 const manageResults = ref<SearchUserResult[]>([])
@@ -98,7 +98,14 @@ function onInfoScroll() {
 }
 const activeProfile = computed(() => props.focusedUserProfile || props.peerProfile)
 const isUserInfoMode = computed(() => Boolean(props.focusedUserProfile?.id))
-const isGroupMode = computed(() => Boolean(props.selectedChat && !props.selectedChat.is_direct && !isUserInfoMode.value))
+/**
+ * Saved Messages self-chat (backend chat kind 'saved'): a service chat, not a
+ * group — no GroupEdit/settings, no members/manage tabs, no participants
+ * subtitle. The backend already rejects member ops for it, so the panel must
+ * not offer them (no dead buttons).
+ */
+const isSavedChat = computed(() => (props.selectedChat?.kind || '').trim() === 'saved')
+const isGroupMode = computed(() => Boolean(props.selectedChat && !props.selectedChat.is_direct && !isUserInfoMode.value && !isSavedChat.value))
 const infoTitle = computed(() => {
   if (isUserInfoMode.value) return t('chat.contact_info', undefined, 'Contact info')
   if (isGroupMode.value) return t('chat.group_info')
@@ -119,7 +126,10 @@ const profilePlaylistResolved = ref(false)
 const showProfilePlaylist = computed(() => {
   if (!profileUserID.value) return false
   if (!(isUserInfoMode.value || Boolean(props.selectedChat?.is_direct))) return false
-  if (!profilePlaylistResolved.value) return true
+  // Empty playlist never renders (own or foreign): no "0" count, no empty placeholder.
+  // Hide while resolving/loading too so a 0-count row never flashes.
+  if (!profilePlaylistResolved.value || profileTracksLoading.value) return false
+  if (profileTracks.value.length === 0) return false
   return profilePlaylistPublic.value
 })
 
@@ -236,7 +246,7 @@ watch(
 watch(
   () => props.selectedChat?.id,
   () => {
-    activeTab.value = props.selectedChat?.is_direct ? 'media' : 'members'
+    activeTab.value = props.selectedChat?.is_direct || (props.selectedChat?.kind || '').trim() === 'saved' ? 'media' : 'members'
     manageMembers.value = false
     resetManageSearch()
   },
@@ -349,7 +359,8 @@ const birthday = computed(() => {
     (typeof nested.birth_date === 'string' ? nested.birth_date : '') ||
     (typeof nested.birthDate === 'string' ? nested.birthDate : '')
   ).trim()
-  if (!raw) return '-'
+  // Empty birthday hides the row entirely (never render "-").
+  if (!raw) return ''
   const parsed = new Date(raw)
   if (Number.isNaN(parsed.getTime())) return raw
   return parsed.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
@@ -705,9 +716,10 @@ function onToggleChannelSubscribe() {
 }
 
 watch(
-  () => [props.open, activeTab.value, isGroupMode.value, canManageGroup.value] as const,
-  ([open, tab, group, canManage]) => {
-    if (open && tab === 'manage' && (!group || !canManage)) activeTab.value = 'members'
+  () => [props.open, activeTab.value, isGroupMode.value, canManageGroup.value, isSavedChat.value] as const,
+  ([open, tab, group, canManage, saved]) => {
+    if (open && saved && (tab === 'manage' || tab === 'members')) activeTab.value = 'media'
+    else if (open && tab === 'manage' && (!group || !canManage)) activeTab.value = 'members'
   },
   { immediate: true },
 )
@@ -788,6 +800,7 @@ async function downloadAttachment(attachmentID: string, filename: string, fallba
 }
 
 function openGroupSettings() {
+  if (isSavedChat.value) return
   if (props.selectedChat?.is_direct) return
   if (activeTab.value !== 'manage') activeTab.value = 'members'
   manageMembers.value = !manageMembers.value
@@ -820,7 +833,7 @@ function openGroupSettings() {
     />
     <template v-else>
     <GroupEditPanel
-      v-if="manageMembers && !selectedChat?.is_direct && canManageGroup"
+      v-if="manageMembers && !selectedChat?.is_direct && canManageGroup && !isSavedChat"
       :selected-chat="selectedChat"
       :current-user="currentUser"
       :chat-members="chatMembers"
@@ -844,7 +857,7 @@ function openGroupSettings() {
         <div class="ipTitle">{{ infoTitle }}</div>
       </div>
       <div class="ipHeaderActions">
-        <button v-if="!selectedChat?.is_direct && canManageGroup" type="button" class="ipIconBtn" :aria-label="t('chat.group_settings')" @click="openGroupSettings">
+        <button v-if="!selectedChat?.is_direct && canManageGroup && !isSavedChat" type="button" class="ipIconBtn" :aria-label="t('chat.group_settings')" @click="openGroupSettings">
           <v-icon :icon="manageMembers ? 'mdi-cog' : 'mdi-cog-outline'" size="18" />
         </button>
       </div>
@@ -862,9 +875,12 @@ function openGroupSettings() {
           >
             <img class="ipAvatarImg" :src="avatarSrc" alt="" />
           </div>
+          <div v-else-if="isSavedChat" class="ipHeroAvatarFallback ipHeroAvatarSaved" aria-hidden="true">
+            <svg class="ipSavedGlyph" viewBox="0 0 24 24" width="40" height="40" fill="currentColor" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" /></svg>
+          </div>
           <div v-else class="ipHeroAvatarFallback" :style="{ background: avatarColorFor(selectedChat?.id || displayName) }">{{ displayName.slice(0, 1).toUpperCase() }}</div>
       <div class="ipName">{{ displayName }}</div>
-      <div v-if="subtitle" class="ipSubtitle">{{ subtitle }}</div>
+      <div v-if="subtitle && !isSavedChat" class="ipSubtitle">{{ subtitle }}</div>
     </div>
 
     <div v-if="selectedChat?.is_direct || isUserInfoMode" class="ipMetaSection">
@@ -875,7 +891,7 @@ function openGroupSettings() {
           <div class="ipMetaLabel">{{ t('chat.username') }}</div>
         </div>
       </div>
-      <div class="ipMetaRow">
+      <div v-if="birthday" class="ipMetaRow">
         <v-icon icon="mdi-calendar-month-outline" size="18" class="ipMetaIcon" />
         <div>
           <div class="ipMetaValue">{{ birthday }}</div>
@@ -891,11 +907,7 @@ function openGroupSettings() {
         <span class="ipPlaylistCount">{{ profileTracks.length }}</span>
       </div>
 
-      <div v-if="profileTracksLoading" class="ipEmpty">{{ t('common.loading') }}</div>
-      <div v-else-if="profileTracks.length === 0" class="ipEmpty">
-        {{ t('chat.playlist_empty', undefined, 'No saved tracks yet') }}
-      </div>
-      <template v-else>
+      <div v-if="profileTracks.length > 0">
         <button
           v-for="track in profileTracks"
           :key="track.id"
@@ -914,12 +926,12 @@ function openGroupSettings() {
           </span>
           <span v-if="track.duration > 0" class="ipTrackTime">{{ formatPlayerTime(track.duration) }}</span>
         </button>
-      </template>
+      </div>
     </div>
 
     <div class="ipTabs">
       <button
-        v-if="!selectedChat?.is_direct && !isUserInfoMode"
+        v-if="!selectedChat?.is_direct && !isUserInfoMode && !isSavedChat"
         type="button"
         class="ipTab"
         :class="{ active: activeTab === 'members' }"
@@ -928,7 +940,7 @@ function openGroupSettings() {
         {{ t('chat.members') }}
       </button>
       <button
-        v-if="!selectedChat?.is_direct && !isUserInfoMode && canManageGroup"
+        v-if="!selectedChat?.is_direct && !isUserInfoMode && canManageGroup && !isSavedChat"
         type="button"
         class="ipTab"
         :class="{ active: activeTab === 'manage' }"
@@ -1206,6 +1218,19 @@ function openGroupSettings() {
   font-size: 34px;
   font-weight: 700;
   letter-spacing: -.02em;
+}
+
+/* Saved Messages badge: same gradient/glyph as the chat list row
+ * (ChatSidebarChatsPane .cpAvatarSaved). Inline SVG on purpose —
+ * mdi-bookmark-outline is NOT in the MDI subset font. No photo exists for
+ * saved, so the hero badge is inert (no avatar preview). */
+.ipHeroAvatarSaved {
+  background: linear-gradient(135deg, #4a90d9 0%, #2f6cb3 100%);
+  color: #fff;
+}
+
+.ipSavedGlyph {
+  display: block;
 }
 
 .ipName {

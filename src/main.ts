@@ -7,11 +7,10 @@ import { flushOutbox } from './lib/offline/outbox'
 import { vLongContext } from './directives/longContext'
 import './index.css'
 import './components/core/core.css'
-import { applyInterfaceScale, applyPowerSaving, loadInterfaceScale, loadPowerSaving } from './components/settings/settingsEffects'
+import { applyPowerSaving, loadPowerSaving } from './components/settings/settingsEffects'
 
-// Apply scale + power-saving classes on first paint (before App mounts),
-// otherwise the first frame flashes unscaled/animated.
-applyInterfaceScale(loadInterfaceScale())
+// Apply power-saving classes on first paint (before App mounts),
+// otherwise the first frame flashes animated.
 applyPowerSaving(loadPowerSaving())
 
 const initialPrefs = initTheme()

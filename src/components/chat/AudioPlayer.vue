@@ -29,6 +29,11 @@ const playlist = usePlaylist()
 const resolvedTitle = ref('')
 const resolvedArtist = ref('')
 const smoothTime = ref(0)
+// BUG7b: upfront duration without pressing play. props.durationMs (API) wins
+// when present; otherwise a hidden preload="metadata" probe fills this in on
+// loadedmetadata. Never derived from playback state alone.
+const probeEl = ref<HTMLAudioElement | null>(null)
+const probedDuration = ref(0)
 
 let rafHandle = 0
 let lastTickTs = 0
@@ -45,6 +50,7 @@ const isPlaying = computed(() => isActive.value && state.playing)
 const time = computed(() => (isActive.value ? state.time : 0))
 const duration = computed(() => {
   if (isActive.value && state.duration > 0) return state.duration
+  if (probedDuration.value > 0) return probedDuration.value
   if (props.durationMs && props.durationMs > 0) return props.durationMs / 1000
   return 0
 })
@@ -76,6 +82,11 @@ const artistLabel = computed(() => {
   if (isVoiceNote.value) return ''
   return queuedTrack.value?.artist || props.artist || resolvedArtist.value || ''
 })
+// BUG7a: a missing artist is never synthesized from the file name — the UI
+// shows the dedicated "Unknown artist" string instead (voice notes show no
+// text at all and never reach this branch).
+const unknownArtistLabel = computed(() => t('player.unknown_artist', undefined, 'Unknown artist'))
+const artistDisplay = computed(() => artistLabel.value || unknownArtistLabel.value)
 const ringStyle = computed(() => ({ ['--ring' as string]: `${Math.round(playedRatio.value * 3600) / 10}deg` }))
 
 function formatTime(sec: number): string {
@@ -162,17 +173,68 @@ function currentTrackInput() {
     url: props.src,
     title: statusTitle.value,
     artist: artistLabel.value,
-    durationMs: props.durationMs || 0,
+    durationMs: props.durationMs || Math.round(probedDuration.value * 1000) || 0,
     poster: props.poster || '',
   }
 }
 
-function seek(event: MouseEvent) {
-  const line = event.currentTarget as HTMLDivElement | null
-  if (!line || !isActive.value || !duration.value || props.pending || !props.src) return
+function ratioFromEvent(event: MouseEvent, line: HTMLDivElement): number {
   const rect = line.getBoundingClientRect()
-  const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-  playerSeek(ratio * duration.value)
+  if (!(rect.width > 0)) return 0
+  return Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+}
+
+// BUG8: the waveform/line is an interactive seekbar for voice too — including
+// BEFORE the first play. A tap then activates the track and seeks in one
+// gesture instead of being ignored (the old `!isActive` early-return).
+async function seek(event: MouseEvent) {
+  const line = event.currentTarget as HTMLDivElement | null
+  if (!line || props.pending || !props.src) return
+  const total = duration.value
+  if (!(total > 0)) {
+    // Duration still unknown (no API value, probe not ready): start playback
+    // so metadata arrives; the progress loop follows from there.
+    await togglePlayback()
+    return
+  }
+  const ratio = ratioFromEvent(event, line)
+  if (!isActive.value) {
+    const started = await activate(currentTrackInput())
+    if (!started) {
+      toast.error(t('player.play_failed', undefined, 'Could not play this track'))
+      return
+    }
+    playerSeek(ratio * total)
+    return
+  }
+  playerSeek(ratio * total)
+}
+
+function seekByKeyboard(event: KeyboardEvent) {
+  if (props.pending || !props.src) return
+  const total = duration.value
+  if (!(total > 0)) return
+  let target: number | null = null
+  if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+    event.preventDefault()
+    const delta = event.key === 'ArrowRight' ? 5 : -5
+    target = (isActive.value ? time.value : 0) + delta
+  } else if (event.key === 'Home') {
+    event.preventDefault()
+    target = 0
+  } else if (event.key === 'End') {
+    event.preventDefault()
+    target = total
+  }
+  if (target === null) return
+  const clamped = Math.min(total, Math.max(0, target))
+  if (!isActive.value) {
+    void activate(currentTrackInput()).then((started) => {
+      if (started) playerSeek(clamped)
+    })
+    return
+  }
+  playerSeek(clamped)
 }
 
 async function loadMeta() {
@@ -182,6 +244,8 @@ async function loadMeta() {
     resolvedArtist.value = ''
     return
   }
+  // BUG7a: resolveAudioMeta only trusts real tags now; the file-name fallback
+  // is the name as-is (no '-' split), so meta.artist is '' when tags lack it.
   const fallback = props.title || props.artist || ''
   const meta = await resolveAudioMeta(props.src, fallback)
   if (!meta) return
@@ -290,8 +354,16 @@ function releaseMenu() {
 
 onBeforeUnmount(releaseMenu)
 
+function onProbeLoadedMetadata() {
+  const node = probeEl.value
+  if (!node) return
+  const value = node.duration
+  if (Number.isFinite(value) && value > 0) probedDuration.value = value
+}
+
 watch([() => props.src, () => props.pending], () => {
   smoothTime.value = 0
+  probedDuration.value = 0
   resolvedTitle.value = ''
   resolvedArtist.value = ''
   closeMenu()
@@ -334,6 +406,17 @@ onMounted(() => {
         {{ props.pending || !props.src ? '--:--' : `${formatTime(displayTime)} / ${formatTime(duration)}` }}
       </div>
     </div>
+    <!-- BUG7b: upfront duration probe (never played, metadata only). -->
+    <audio
+      v-if="props.src && !props.pending"
+      ref="probeEl"
+      class="audioProbe"
+      :src="props.src"
+      preload="metadata"
+      aria-hidden="true"
+      tabindex="-1"
+      @loadedmetadata="onProbeLoadedMetadata"
+    />
   </div>
 
   <div v-else class="audioPlayer" :class="{ error: isActive && state.error }" @contextmenu="openMenu">
@@ -354,17 +437,30 @@ onMounted(() => {
       </span>
     </button>
     <div class="audioBody">
-      <div class="audioMeta">
-        <div class="audioTitle" :title="statusTitle">{{ statusTitle }}</div>
-        <div v-if="artistLabel" class="audioArtist">{{ artistLabel }}</div>
+      <!-- Voice/round notes show no text at all (no title/artist/placeholder):
+           play + waveform + time only. Plain audio files keep the block below. -->
+      <div v-if="!isVoiceNote || (isActive && state.error)" class="audioMeta">
+        <div v-if="!isVoiceNote" class="audioTitle" :title="statusTitle">{{ statusTitle }}</div>
+        <div v-if="!isVoiceNote && !(isActive && state.error)" class="audioArtist">{{ artistDisplay }}</div>
         <div v-else-if="isActive && state.error" class="audioArtist audioErrorText">
           {{ t('player.play_failed_short', undefined, "Can't play the audio") }}
         </div>
       </div>
+      <!-- BUG8: waveform-seek stays mounted AND interactive for voice
+           (play + waveform + time, no text block above). The bar is a slider
+           even before the first play: click activates + seeks (see seek()). -->
       <div
         class="audioLine"
-        :class="{ pending: props.pending || !props.src || !isActive, wave: peaks.length > 0 }"
+        :class="{ pending: props.pending || !props.src, wave: peaks.length > 0 }"
+        role="slider"
+        :tabindex="props.pending || !props.src ? -1 : 0"
+        :aria-label="t('player.play', undefined, 'Play')"
+        :aria-valuemin="0"
+        :aria-valuemax="Math.round(duration)"
+        :aria-valuenow="Math.round(displayTime)"
+        :aria-disabled="props.pending || !props.src"
         @click="seek"
+        @keydown="seekByKeyboard"
       >
         <div v-if="peaks.length > 0" class="audioWave" aria-hidden="true">
           <span
@@ -383,6 +479,17 @@ onMounted(() => {
         {{ props.pending || !props.src ? '--:--' : `${formatTime(displayTime)} / ${formatTime(duration)}` }}
       </div>
     </div>
+    <!-- BUG7b: upfront duration probe (never played, metadata only). -->
+    <audio
+      v-if="props.src && !props.pending"
+      ref="probeEl"
+      class="audioProbe"
+      :src="props.src"
+      preload="metadata"
+      aria-hidden="true"
+      tabindex="-1"
+      @loadedmetadata="onProbeLoadedMetadata"
+    />
   </div>
 
   <Teleport to="body">
@@ -451,7 +558,13 @@ onMounted(() => {
 .audioArtPlaceholder {
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  /* BUG8b: the play circle takes the LIVE theme accent — a single source,
+     var(--accent) (inline on <html> via theme.ts applyTheme, beating the
+     :root fallback). The solid background-color is the fallback if color-mix
+     is unsupported; the gradient derives its dark stop from the same live
+     var, never from a static blue hex. */
+  background-color: var(--accent);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 78%, black));
   color: #fff;
 }
 
@@ -539,6 +652,7 @@ onMounted(() => {
 .audioLineValue {
   position: absolute;
   inset: 0 auto 0 0;
+  /* BUG8b: progress takes the live theme accent (see .audioArtPlaceholder). */
   background: var(--accent);
   border-radius: 999px;
 }
@@ -581,7 +695,17 @@ onMounted(() => {
 }
 
 .audioWaveBar.played {
+  /* BUG8b: played waveform takes the live theme accent. */
   background: var(--accent);
+}
+
+.audioProbe {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .audioPlayer.error .audioLineValue {
@@ -611,6 +735,7 @@ onMounted(() => {
   cursor: pointer;
   display: block;
   outline: 0;
+  /* BUG8b: progress ring takes the live theme accent. */
   background: conic-gradient(var(--accent) var(--ring, 0deg), var(--border-strong) 0deg);
 }
 
@@ -634,7 +759,9 @@ onMounted(() => {
   position: absolute;
   inset: 7px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  /* BUG8b: same live-accent source as .audioArtPlaceholder. */
+  background-color: var(--accent);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 78%, black));
 }
 
 .roundArtToggle {

@@ -169,15 +169,33 @@ function modeLabel(mode: ThemeMode): string {
 </template>
 
 <style scoped>
+/* N3: pills were off-center because the container overrode the shared grid
+   with `display:flex` (losing equal tracks/stretch) and the buttons relied on
+   `text-align:center` (no-op inside flex) with inherited `line-height:normal`
+   (~20px for 13.5px text vs the 16px icon), so the glyph box drifted 1-2px.
+   Restore the grid and pin both axes + line-height for pixel-perfect pills. */
 .tgSegment {
-  display: flex;
+  display: grid;
+  align-items: stretch;
 }
 
 .tgSegmentBtn {
-  flex: 1 1 0;
+  flex: none;
   min-width: 0;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  gap: 6px;
+  line-height: 1;
+  padding: 0 12px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.tgSegmentBtn .v-icon {
+  flex: none;
+  line-height: 1;
+  margin: 0;
 }
 
 .tgSwatchCustom,

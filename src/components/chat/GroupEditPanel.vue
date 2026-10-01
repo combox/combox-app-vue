@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
-  getChat,
   getUserByID,
   listChatEvents,
-  listChats,
   searchDirectory,
   updateChat,
   type AuthUser,
@@ -31,7 +29,7 @@ import {
   truncateRunes,
 } from './groupSettingsMeta'
 
-type PanelMode = 'main' | 'admins' | 'add_admin' | 'members' | 'removed' | 'links' | 'slow_mode' | 'discussion' | 'events'
+type PanelMode = 'main' | 'admins' | 'add_admin' | 'members' | 'removed' | 'links' | 'slow_mode' | 'events'
 
 /** Patch body accepted by the SDK `updateChat` (PATCH /chats/{chatID}). */
 type ChatPatch = Parameters<typeof updateChat>[1]
@@ -47,7 +45,6 @@ type SettingsDraft = {
   autoTranslate: boolean
   sendPermission: 'all' | 'admins'
   slowModeSeconds: number
-  discussionChatID: string
 }
 
 function draftFromChat(chat: ChatItem | null | undefined): SettingsDraft {
@@ -61,7 +58,6 @@ function draftFromChat(chat: ChatItem | null | undefined): SettingsDraft {
     autoTranslate: Boolean(chat?.auto_translate ?? false),
     sendPermission: normalizeSendPermission(chat?.send_permission),
     slowModeSeconds: Number(chat?.slow_mode_seconds || 0),
-    discussionChatID: String(chat?.discussion_chat_id ?? '').trim(),
   }
 }
 
@@ -87,6 +83,14 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const toast = useToast()
+/**
+ * Saved Messages self-chat (backend chat kind 'saved') must never render group
+ * settings here (Group title/Chat icon/Description, members, invites): the
+ * backend rejects member/settings ops for it, so any such control would be a
+ * dead button. The panel renders nothing for saved (ChatInfoPanel already
+ * avoids mounting it — this is defense-in-depth).
+ */
+const isSavedChat = computed(() => (props.selectedChat?.kind || '').trim() === 'saved')
 const panelMode = ref<PanelMode>('main')
 
 const addQuery = ref('')
@@ -109,19 +113,12 @@ const showAuthorsDraft = ref(serverDraft.value.showAuthorsProfiles)
 const autoTranslateDraft = ref(serverDraft.value.autoTranslate)
 const sendPermissionDraft = ref(serverDraft.value.sendPermission)
 const slowModeDraft = ref(serverDraft.value.slowModeSeconds)
-const discussionChatIDDraft = ref(serverDraft.value.discussionChatID)
 /** Field name -> in-flight PATCH, used to keep rapid toggles from racing each other. */
 const pendingSettings = ref<Record<string, boolean>>({})
 
 const descriptionTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const descriptionWrapRef = ref<HTMLElement | null>(null)
 const descriptionPickerOpen = ref(false)
-
-const discussionChats = ref<ChatItem[]>([])
-const discussionTitles = ref<Record<string, string>>({})
-const discussionLoading = ref(false)
-const discussionError = ref('')
-const discussionLoadedFor = ref('')
 
 const eventsRaw = ref<ChatEvent[]>([])
 const actorNames = ref<Record<string, string>>({})
@@ -220,7 +217,6 @@ function applyServerDraft(fresh: SettingsDraft): void {
   adoptIfClean(autoTranslateDraft, previous.autoTranslate, fresh.autoTranslate)
   adoptIfClean(sendPermissionDraft, previous.sendPermission, fresh.sendPermission)
   adoptIfClean(slowModeDraft, previous.slowModeSeconds, fresh.slowModeSeconds)
-  adoptIfClean(discussionChatIDDraft, previous.discussionChatID, fresh.discussionChatID)
   serverDraft.value = fresh
 }
 
@@ -234,7 +230,6 @@ function resetDrafts(fresh: SettingsDraft): void {
   autoTranslateDraft.value = fresh.autoTranslate
   sendPermissionDraft.value = fresh.sendPermission
   slowModeDraft.value = fresh.slowModeSeconds
-  discussionChatIDDraft.value = fresh.discussionChatID
   serverDraft.value = fresh
   pendingSettings.value = {}
 }
@@ -252,7 +247,6 @@ watch(
       avatarDataUrl.value = null
       saveError.value = ''
       panelMode.value = 'main'
-      resetDiscussionState()
       resetEventsState()
       resetDrafts(next)
     } else {
@@ -676,94 +670,6 @@ function copyPublicLink() {
 }
 
 // ---------------------------------------------------------------------------
-// Discussion (linked group)
-// ---------------------------------------------------------------------------
-
-function resetDiscussionState() {
-  discussionChats.value = []
-  discussionLoading.value = false
-  discussionError.value = ''
-  discussionLoadedFor.value = ''
-}
-
-const discussionCurrentTitle = computed(() => {
-  const chatID = discussionChatIDDraft.value
-  if (!chatID) return ''
-  const listed = discussionChats.value.find((item) => (item.id || '').trim() === chatID)
-  if (listed) return (listed.title || '').trim()
-  return (discussionTitles.value[chatID] || '').trim()
-})
-
-/** Main-screen / sub-screen value: the linked title, "Linked" while unknown, or nothing. */
-const discussionRowMeta = computed(() => {
-  if (!discussionChatIDDraft.value) return t('chat.groupset_no_discussion', undefined, 'No discussion')
-  return discussionCurrentTitle.value || t('chat.groupset_discussion_linked', undefined, 'Linked')
-})
-
-async function loadDiscussionChats() {
-  if (discussionLoading.value) return
-  const chatID = (props.selectedChat?.id || '').trim()
-  if (!chatID) return
-  discussionLoadedFor.value = chatID
-  discussionLoading.value = true
-  discussionError.value = ''
-  try {
-    const chats = await listChats()
-    const titles: Record<string, string> = {}
-    for (const item of chats) {
-      const id = (item.id || '').trim()
-      if (id) titles[id] = (item.title || '').trim()
-    }
-    discussionTitles.value = { ...discussionTitles.value, ...titles }
-    discussionChats.value = chats.filter((item) => {
-      const id = (item.id || '').trim()
-      if (!id || id === chatID) return false
-      return (item.kind || '').trim().toLowerCase() === 'group'
-    })
-    const currentID = discussionChatIDDraft.value
-    if (currentID && !titles[currentID]) {
-      try {
-        const linked = await getChat(currentID)
-        discussionTitles.value = { ...discussionTitles.value, [currentID]: (linked.title || '').trim() }
-      } catch {
-        // The linked chat has no resolvable title; the row shows "Linked".
-      }
-    }
-  } catch (error) {
-    discussionError.value = error instanceof Error ? error.message : t('chat.groupset_load_failed', undefined, 'Could not load chats')
-  } finally {
-    discussionLoading.value = false
-  }
-}
-
-function openDiscussion() {
-  panelMode.value = 'discussion'
-  void loadDiscussionChats()
-}
-
-/** Resolves the linked chat title for the main-screen row, at most once per selected chat. */
-watch(
-  () => [panelMode.value, (props.selectedChat?.id || '').trim(), discussionChatIDDraft.value] as const,
-  ([mode, chatID, linkedID]) => {
-    if (mode !== 'main' || !chatID || !linkedID) return
-    if (discussionLoadedFor.value === chatID) return
-    void loadDiscussionChats()
-  },
-  { immediate: true },
-)
-
-/** `discussion_chat_id: ''` clears the link (see service_chat_profile.go). */
-function setDiscussionChat(nextChatID: string) {
-  const next = (nextChatID || '').trim()
-  if (discussionChatIDDraft.value === next || pendingSettings.value['discussion_chat_id']) return
-  const previous = discussionChatIDDraft.value
-  discussionChatIDDraft.value = next
-  void patchSettings('discussion_chat_id', { discussion_chat_id: next }, () => {
-    discussionChatIDDraft.value = previous
-  })
-}
-
-// ---------------------------------------------------------------------------
 // Recent actions
 // ---------------------------------------------------------------------------
 
@@ -836,7 +742,7 @@ function openEvents() {
 </script>
 
 <template>
-  <div class="gpRoot">
+  <div v-if="!isSavedChat" class="gpRoot">
     <header class="gpHeader">
       <button type="button" class="gpIconBtn" :aria-label="t('chat.back')" @click="goBack">
         <v-icon icon="mdi-arrow-left" size="20" />
@@ -849,7 +755,6 @@ function openEvents() {
           : panelMode === 'members' ? t('chat.members', undefined, 'Members')
           : panelMode === 'removed' ? t('chat.removed_users', undefined, 'Blocked users')
           : panelMode === 'slow_mode' ? t('chat.groupset_slow_mode', undefined, 'Slow mode')
-          : panelMode === 'discussion' ? t('chat.groupset_discussion', undefined, 'Linked group')
           : panelMode === 'events' ? t('chat.recent_actions', undefined, 'Recent actions')
           : t('chat.invite_links', undefined, 'Invite links')
         }}
@@ -1094,14 +999,6 @@ function openEvents() {
               <span class="gpToggleKnob" />
             </button>
           </div>
-          <button type="button" class="gpRow" @click="openDiscussion">
-            <div class="gpRowIcon"><v-icon icon="mdi-forum-outline" size="20" /></div>
-            <div class="gpRowBody">
-              <div class="gpRowTitle">{{ t('chat.groupset_discussion', undefined, 'Linked group') }}</div>
-              <div class="gpRowMeta">{{ discussionRowMeta }}</div>
-            </div>
-            <v-icon icon="mdi-chevron-right" size="18" class="gpChevron" />
-          </button>
           <button type="button" class="gpRow" @click="openEvents">
             <div class="gpRowIcon"><v-icon icon="mdi-history" size="20" /></div>
             <div class="gpRowBody">
@@ -1280,39 +1177,6 @@ function openEvents() {
             </div>
             <v-icon v-if="slowModeDraft === option.seconds" icon="mdi-check-bold" size="18" class="gpCheck" />
           </button>
-        </section>
-      </template>
-
-      <template v-else-if="panelMode === 'discussion'">
-        <section class="gpSection">
-          <div class="gpInfoList">
-            <div class="gpInfoRow">
-              <span class="gpInfoKey">{{ t('chat.groupset_discussion', undefined, 'Linked group') }}</span>
-              <span class="gpInfoValue">{{ discussionRowMeta }}</span>
-            </div>
-          </div>
-          <div class="gpHint">{{ t('chat.groupset_discussion_hint', undefined, 'Pick a group where comments will be discussed.') }}</div>
-        </section>
-        <section class="gpSection gpRows">
-          <button type="button" class="gpRow" @click="setDiscussionChat('')">
-            <div class="gpRowIcon"><v-icon icon="mdi-link-off" size="20" /></div>
-            <div class="gpRowBody">
-              <div class="gpRowTitle">{{ t('chat.groupset_no_discussion', undefined, 'No discussion') }}</div>
-              <div class="gpRowMeta">{{ t('chat.groupset_no_discussion_meta', undefined, 'The linked group is removed') }}</div>
-            </div>
-            <v-icon v-if="!discussionChatIDDraft" icon="mdi-check-bold" size="18" class="gpCheck" />
-          </button>
-          <button v-for="item in discussionChats" :key="item.id" type="button" class="gpRow" @click="setDiscussionChat(item.id)">
-            <div class="gpRowIcon"><v-icon icon="mdi-account-group-outline" size="20" /></div>
-            <div class="gpRowBody">
-              <div class="gpRowTitle">{{ item.title }}</div>
-              <div v-if="item.public_slug" class="gpRowMeta">@{{ item.public_slug }}</div>
-            </div>
-            <v-icon v-if="discussionChatIDDraft === item.id" icon="mdi-check-bold" size="18" class="gpCheck" />
-          </button>
-          <div v-if="discussionLoading" class="gpHint gpSubHint">{{ t('chat.groupset_loading', undefined, 'Loading...') }}</div>
-          <div v-else-if="discussionError" class="gpError gpSubHint">{{ discussionError }}</div>
-          <div v-else-if="discussionChats.length === 0" class="gpHint gpSubHint">{{ t('chat.groupset_no_groups', undefined, 'No groups found') }}</div>
         </section>
       </template>
 

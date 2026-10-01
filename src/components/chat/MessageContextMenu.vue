@@ -42,7 +42,7 @@ const emit = defineEmits<{
   report: []
   select: []
   translate: []
-  openPicker: []
+  openPicker: [anchor?: { x: number; y: number }]
 }>()
 
 const { t } = useI18n()
@@ -138,6 +138,35 @@ function recordReaction(emoji: string) {
 function onQuickReact(emoji: string) {
   recordReaction(emoji)
   emit('react', emoji)
+}
+
+/**
+ * Anchor for the all-reactions picker: the chevron button rect in viewport
+ * (client) coords — scroll-safe for `position: fixed` popovers. The rect is
+ * also stashed on window (same pattern as `__comboxLastContextMessage`),
+ * because the `openPicker` payload is dropped upstream by
+ * ChatMessageList (`@open-picker="$emit('openContextReactionPicker')"`)
+ * and the picker otherwise falls back to the stale PKM point.
+ */
+function onMoreClick(event: MouseEvent) {
+  try {
+    const target = event.currentTarget
+    const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : null
+    if (rect && rect.width > 0 && rect.height > 0) {
+      const box = {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        right: Math.round(rect.right),
+        bottom: Math.round(rect.bottom),
+      }
+      ;(window as unknown as { __comboxPickerAnchor?: { left: number; top: number; right: number; bottom: number } }).__comboxPickerAnchor = box
+      emit('openPicker', { x: box.left, y: box.bottom })
+      return
+    }
+  } catch {
+    // rect unavailable — fall back to the PKM point below
+  }
+  emit('openPicker', { x: props.x, y: props.y })
 }
 
 function clampMenuPosition() {
@@ -311,7 +340,7 @@ onBeforeUnmount(() => {
             class="cmQuick cmMore"
             :title="t('chat.add_reaction', undefined, 'Add reaction')"
             aria-label="More reactions"
-            @click="emit('openPicker')"
+            @click="onMoreClick"
           >
             <svg class="cmMoreIcon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z" fill="currentColor" />

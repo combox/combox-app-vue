@@ -1243,5 +1243,7 @@
   "settings.folder_add_chats": "Add Chats",
   "settings.folder_chat_types": "Chat types",
   "settings.folder_choose_icon": "Choose an icon",
-  "settings.folder_include_chats_title": "Include Chats {selected}/{max}"
+  "settings.folder_include_chats_title": "Include Chats {selected}/{max}",
+  "chat.saved_messages": "Saved Messages",
+  "chat.kind_saved": "Saved Messages"
 }

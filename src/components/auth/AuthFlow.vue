@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ApiError,
@@ -13,11 +13,31 @@ import {
 } from 'combox-api'
 import { notifyLegacyMigration, requestLegacyMigration } from '../../stores/legacyMigration'
 import { useI18n } from '../../i18n/i18n'
+import CropDialog from '../core/CropDialog.vue'
 
 type Step = 'email' | 'loginCode' | 'loginPassword' | 'signupCode' | 'signupPassword' | 'username' | 'profile'
 
 const GRADIENTS = ['#4d7cff', '#4db58e', '#8f6fff', '#e97d55', '#2da0d4', '#cc7a3c']
 const USERNAME_RE = /^[a-z0-9_]{4,32}$/
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/**
+ * Login identity is email OR legacy username (see POST /auth/login contract).
+ * The first field accepts any non-empty login; only a value containing '@'
+ * is treated as an email attempt. Email-format checks live ONLY on real
+ * email paths (email login branch below, signup, LegacyMigrationModal bind).
+ */
+function isEmailIdentity(value: string): boolean {
+  return value.includes('@')
+}
+
+function apiCodeOf(caught: unknown): string {
+  if (caught instanceof ApiError) return (caught.code || '').toLowerCase()
+  if (caught && typeof caught === 'object' && 'code' in caught) {
+    return String((caught as { code?: unknown }).code || '').toLowerCase()
+  }
+  return ''
+}
 
 function gradientFromIdentity(firstName: string, lastName: string, username: string): string {
   const source = `${firstName.trim().toLowerCase()}|${lastName.trim().toLowerCase()}|${username.trim().toLowerCase()}`
@@ -49,6 +69,44 @@ function parseError(error: unknown, fallback: string): string {
 }
 
 /**
+ * Password-step error mapping. The backend answers a wrong login with 401
+ * (message historically like "неверная почта") — surfacing it raw on the
+ * password step misleads legacy nick users. Map by ApiError.code so a
+ * non-existent user / wrong password always reads as credentials error,
+ * never as an email error when the identity is not even an email.
+ */
+function mapLoginError(error: unknown, identity: string): string {
+  const passwordFallback = t('auth.error_password_invalid')
+  const code = apiCodeOf(error)
+  if (!code && !(error instanceof ApiError)) return passwordFallback
+  const nickPath = !isEmailIdentity(identity)
+  const authFailure = new Set([
+    'unauthorized',
+    'invalid_credentials',
+    'invalid_password',
+    'invalid_login',
+    'login_failed',
+    'authentication_failed',
+    'wrong_password',
+    'not_found',
+    'user_not_found',
+    'user_not_exists',
+    'unknown_user',
+    'invalid_user',
+  ])
+  if (authFailure.has(code)) return passwordFallback
+  // Backend email-format complaints must never leak raw ("неверная почта")
+  // on the password step: nick logins see credentials text, email logins
+  // see the generic email-check text.
+  if (code === 'invalid_argument' || code === 'invalid_email' || code === 'validation_failed') {
+    if (nickPath) return passwordFallback
+    return t('auth.error_email_check')
+  }
+  if (nickPath) return passwordFallback
+  return parseError(error, passwordFallback)
+}
+
+/**
  * Raw password login that keeps `migration_required` from the response.
  * SDK login() persists the same snapshot but returns only {user}, dropping
  * the flag — and the SDK must not be edited — so AuthFlow performs the single
@@ -73,10 +131,14 @@ type RawLoginPayload = {
 }
 
 async function loginWithMigration(loginValue: string, password: string, loginKey: string): Promise<{ user: AuthUser; migrationRequired: boolean }> {
+  const body: Record<string, string> = { login: loginValue, password }
+  // login_key is optional: legacy password accounts skip the gate, so a nick
+  // login without an email code must NOT send an empty key.
+  if (loginKey.trim()) body.login_key = loginKey
   const response = await fetch(`${resolveApiBase()}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ login: loginValue, password, login_key: loginKey }),
+    body: JSON.stringify(body),
   })
   let payload: RawLoginPayload | null = null
   try {
@@ -117,6 +179,11 @@ const firstName = ref('')
 const lastName = ref('')
 const birthDate = ref('')
 const avatarDataUrl = ref('')
+// First-setup avatar goes through the round CropDialog: the file input only
+// mints an objectURL, the dialog returns a square Blob, and the existing
+// register flow (avatar_data_url) uploads it unchanged.
+const cropOpen = ref(false)
+const cropSrc = ref('')
 
 const avatarGradient = computed(() => gradientFromIdentity(firstName.value, lastName.value, username.value))
 const previewInitials = computed(() => getInitials(firstName.value, lastName.value))
@@ -145,6 +212,20 @@ async function continueFromEmail() {
     errorText.value = t('auth.error_email_required')
     return
   }
+  // Legacy path: a bare nick (no '@') has no email to receive a code —
+  // skip checkEmailExists/sendEmailCode and go straight to the password step.
+  // The direct password login answers migration_required for legacy accounts.
+  if (!isEmailIdentity(normalized)) {
+    emailCode.value = ''
+    loginKey.value = ''
+    errorText.value = ''
+    step.value = 'loginPassword'
+    return
+  }
+  if (!EMAIL_RE.test(normalized)) {
+    errorText.value = t('auth.error_email_check')
+    return
+  }
   loading.value = true
   errorText.value = ''
   try {
@@ -165,25 +246,45 @@ async function continueLogin() {
     errorText.value = t('auth.error_password_required')
     return
   }
-  if (!emailCode.value.trim()) {
-    errorText.value = t('auth.error_code_required')
+  const identity = email.value.trim().toLowerCase()
+  if (!identity) {
+    errorText.value = t('auth.error_email_required')
     return
+  }
+  const emailPath = isEmailIdentity(identity)
+  // Legacy nick logins carry no email code: password alone is enough
+  // (backend skips the login_key gate for is_legacy_unverified).
+  // Email logins keep the code gate — password is still asked only once,
+  // on this step, never again after the bind-code in the modal.
+  if (emailPath) {
+    if (!emailCode.value.trim()) {
+      errorText.value = t('auth.error_code_required')
+      return
+    }
+    if (!loginKey.value.trim()) {
+      errorText.value = t('auth.error_code_required')
+      return
+    }
   }
   loading.value = true
   errorText.value = ''
   try {
-    const result = await loginWithMigration(email.value.trim().toLowerCase(), loginPassword.value, loginKey.value)
+    const result = await loginWithMigration(identity, loginPassword.value, loginKey.value)
     if (result.migrationRequired) {
       // Legacy password account: the stored token is migr-limited, so open
       // the forced email-binding modal instead of letting every request 403.
-      requestLegacyMigration()
+      // Pass the email hint only when the identity really is an email.
+      requestLegacyMigration(emailPath ? identity : '')
     }
     await router.push('/')
   } catch (error) {
     // A migr-limited session retrying login answers 403
-    // EMAIL_BINDING_REQUIRED: open the modal, not a dead-end error.
-    if (notifyLegacyMigration(error)) return
-    errorText.value = parseError(error, t('auth.error_password_invalid'))
+    // EMAIL_BINDING_REQUIRED: open the modal, land on the platform behind it.
+    if (notifyLegacyMigration(error, emailPath ? identity : '')) {
+      await router.push('/')
+      return
+    }
+    errorText.value = mapLoginError(error, identity)
   } finally {
     loading.value = false
   }
@@ -327,21 +428,61 @@ function handleFormSubmit() {
 function back() {
   errorText.value = ''
   if (step.value === 'loginCode' || step.value === 'signupCode' || step.value === 'signupPassword') step.value = 'email'
-  else if (step.value === 'loginPassword') step.value = 'loginCode'
-  else if (step.value === 'username') step.value = 'signupPassword'
+  else if (step.value === 'loginPassword') {
+    // Nick logins never visited the code step — go back to identity, not to a code screen.
+    const identity = email.value.trim().toLowerCase()
+    if (!isEmailIdentity(identity) || !loginKey.value.trim()) step.value = 'email'
+    else step.value = 'loginCode'
+  } else if (step.value === 'username') step.value = 'signupPassword'
   else if (step.value === 'profile') step.value = 'username'
 }
+
+function revokeCropSrc(): void {
+  if (cropSrc.value.startsWith('blob:')) {
+    try {
+      URL.revokeObjectURL(cropSrc.value)
+    } catch {
+      // Revoke is best-effort; a stale blob URL only costs memory.
+    }
+  }
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => reject(new Error('read_failed'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function onCropConfirm(blob: Blob): Promise<void> {
+  cropOpen.value = false
+  try {
+    avatarDataUrl.value = await blobToDataUrl(blob)
+  } catch {
+    avatarDataUrl.value = ''
+  }
+  revokeCropSrc()
+  cropSrc.value = ''
+}
+
+function onCropCancel(): void {
+  cropOpen.value = false
+  revokeCropSrc()
+  cropSrc.value = ''
+}
+
+onBeforeUnmount(() => revokeCropSrc())
 
 function onAvatarSelect(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
-  const reader = new FileReader()
-  reader.onload = () => {
-    avatarDataUrl.value = typeof reader.result === 'string' ? reader.result : ''
-  }
-  reader.readAsDataURL(file)
+  revokeCropSrc()
+  cropSrc.value = URL.createObjectURL(file)
+  cropOpen.value = true
 }
 </script>
 
@@ -360,17 +501,20 @@ function onAvatarSelect(event: Event) {
           <v-alert v-if="errorText" type="error" density="compact" variant="tonal">{{ errorText }}</v-alert>
 
           <template v-if="step === 'email'">
+            <!-- Login identity: email OR legacy username. type="text" (not
+              email) so browsers don't block nicks with native validation;
+              email format is enforced only on real email paths. -->
             <v-text-field
               v-model="email"
               :label="t('auth.enter_email')"
               :placeholder="t('auth.email_placeholder')"
-              type="email"
+              type="text"
               density="comfortable"
               variant="outlined"
               hide-details
               autofocus
-              autocomplete="email"
-              name="email"
+              autocomplete="username"
+              name="username"
               class="auth-field"
             />
             <v-btn block color="primary" size="large" class="auth-primary-btn" type="submit" :disabled="loading">
@@ -478,6 +622,7 @@ function onAvatarSelect(event: Event) {
               <v-progress-circular v-if="loading" indeterminate size="18" width="2" color="currentColor" />
               <template v-else>{{ submitLabel }}</template>
             </v-btn>
+            <CropDialog :open="cropOpen" :src="cropSrc" @confirm="onCropConfirm" @cancel="onCropCancel" />
           </template>
         </form>
       </v-col>

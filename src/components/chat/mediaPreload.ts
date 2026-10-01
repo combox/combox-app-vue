@@ -55,6 +55,12 @@ export function preloadAndDecodeImage(url: string): Promise<void> {
 
     const img = new Image()
     img.decoding = 'async'
+
+    // Listeners must be attached BEFORE setting src: for a cached URL the
+    // load event can fire synchronously on src assignment and would otherwise
+    // be missed, leaving the caller waiting for the 20s timeout ("revives
+    // after a long time" shape).
+    const loadPromise = waitForLoad(img)
     img.src = normalized
 
     try {
@@ -64,7 +70,7 @@ export function preloadAndDecodeImage(url: string): Promise<void> {
       }
 
       // Always await `load` so callers can safely swap placeholders.
-      await waitForLoad(img)
+      await loadPromise
       loaded.set(normalized, 'fulfilled')
     } catch {
       loaded.set(normalized, 'rejected')

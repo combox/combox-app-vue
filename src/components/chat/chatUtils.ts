@@ -145,6 +145,7 @@ export type PreviewLabels = {
 export const PREVIEW_MAX_LEN = 140
 
 const PREVIEW_HTML_TAG_RE = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>|<!--[\s\S]*?-->/g
+const PREVIEW_DANGLING_TAG_TAIL_RE = /<[!/A-Za-z][^<>]*$/
 const PREVIEW_MD_LINK_RE = /\[([^\]\n]*)\]\([^)\s]*\)/g
 
 /**
@@ -181,7 +182,16 @@ export function stripMarkdownForPreview(text: string, maxLen = PREVIEW_MAX_LEN):
     .replace(/^[ \t]{0,3}\d{1,9}[.)][ \t]+/gm, '')
     .replace(/^[ \t]{0,3}(-{3,}|\*{3,}|_{3,})[ \t]*$/gm, '')
   // Explicit HTML tags only (`<b>`, `</a>`, `<br/>`); `a < b` is untouched.
-  out = out.replace(PREVIEW_HTML_TAG_RE, '')
+  // Bounded fixpoint: a single global replace can re-create a tag from
+  // fragments (e.g. `<sc<script>ript>` -> `<script>`), so repeat until stable.
+  for (let i = 0; i < 5; i++) {
+    const next = out.replace(PREVIEW_HTML_TAG_RE, '')
+    if (next === out) break
+    out = next
+  }
+  // Drop a trailing unterminated `<...` / `<!--...` fragment (`<script`, `<!--x`).
+  // `<` followed by space/digit (e.g. `a < b`) is preserved.
+  out = out.replace(PREVIEW_DANGLING_TAG_TAIL_RE, '')
   // One line, single spaces.
   out = out.replace(/\s+/g, ' ').trim()
   if (out.length > maxLen && maxLen > 0) {

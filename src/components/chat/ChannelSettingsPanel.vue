@@ -21,6 +21,7 @@ import { useI18n } from '../../i18n/i18n'
 import { useToast } from '../../composables/useToast'
 import { AVATAR_PALETTE, avatarColorFor } from '../../utils/avatarColor'
 import { normalizeAvatarSrc } from './chatUtils'
+import { setHashToChatId } from './chatWorkspace.hash'
 import ComposerEmojiGifPicker from './ComposerEmojiGifPicker.vue'
 import {
   SLOW_MODE_OPTIONS,
@@ -521,6 +522,19 @@ function setDiscussion(nextID: string) {
   if (localChat.value) localChat.value.discussion_chat_id = nextID
   void persist('discussion_chat_id', { discussion_chat_id: nextID }, {
     revert: () => { if (localChat.value) localChat.value.discussion_chat_id = previous },
+  })
+}
+
+// O3: open the linked discussion group via the workspace hash (the same
+// mechanism UserProfileModal uses). Rendered only when a link exists,
+// so there are no dead buttons.
+function openDiscussionChat(): void {
+  const id = discussionID.value
+  if (!id) return
+  requestClose()
+  void nextTick(() => {
+    setHashToChatId(id)
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
   })
 }
 
@@ -1048,6 +1062,15 @@ watch(screen, () => {
                   <span class="csRowMeta">{{ discussionMeta || t('chat.chanset_no_discussion', undefined, 'No discussion') }}</span>
                 </span>
                 <v-icon icon="mdi-chevron-right" size="18" class="csChevron" />
+              </button>
+
+              <button v-if="discussionID" type="button" class="csRow" @click="openDiscussionChat">
+                <span class="csRowIcon"><v-icon icon="mdi-forum-outline" size="18" /></span>
+                <span class="csRowBody">
+                  <span class="csRowTitle">{{ t('chat.chanset_view_discussion', undefined, 'View discussion') }}</span>
+                  <span class="csRowMeta">{{ discussionTitle || t('chat.chanset_linked_chat', undefined, 'Linked chat') }}</span>
+                </span>
+                <v-icon icon="mdi-open-in-new" size="18" class="csChevron" />
               </button>
 
               <button type="button" class="csRow" @click="go('appearance')">

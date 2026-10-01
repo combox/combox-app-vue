@@ -870,7 +870,7 @@ function onReplyClick() {
                   @click="attachment.url && $emit('openImage', attachment.url)"
                 >
                   <LazyDecodedImage
-                    :src="attachment.url"
+                    :src="attachment.url || attachment.previewUrl"
                     :preview-src="attachment.previewUrl"
                     :alt="attachment.filename || 'image'"
                     img-class="mbGalleryImage"

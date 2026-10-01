@@ -567,6 +567,17 @@ const inDiscussionMode = computed(() => {
   const kind = (conversationChat.value?.kind || '').trim()
   return Boolean(discussionRootMessage.value && kind === 'standalone_channel')
 })
+/** Hide the call/broadcast button in channels the viewer may not publish in. */
+const canBroadcastInSelectedChat = computed(() => {
+  const chat = conversationChat.value
+  if (!chat) return false
+  const kind = (chat.kind || '').trim()
+  if (kind === 'standalone_channel' || Boolean(chat.is_public)) {
+    const role = (chat.viewer_role || '').trim().toLowerCase()
+    return role === 'owner' || role === 'admin'
+  }
+  return true
+})
 const composerReplyTarget = computed(() => (inDiscussionMode.value ? discussionRootMessage.value : replyToMessage.value))
 const renderedMessages = computed(() => {
   if (!inDiscussionMode.value || !discussionRootMessage.value) return filteredMessages.value
@@ -1926,6 +1937,8 @@ onBeforeUnmount(() => {
         :search-value="messageSearch"
         :show-back="inDiscussionMode || mobileConversationOpen"
         :stream-mode="isChannelChat"
+        :loading="loadingMessages"
+        :can-broadcast="canBroadcastInSelectedChat"
         @open-info="openInfo"
         @open-search="openMessageSearch"
         @close-search="closeMessageSearch"

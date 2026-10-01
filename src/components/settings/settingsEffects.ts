@@ -123,59 +123,13 @@ export function notificationSample(values: UserSettingsValues, kind: PerChatKind
   }
 }
 
-// ---- interface scale ----------------------------------------------------------
-// Custom scale applies directly: root font-size in % of 16px (rem-based UI
-// scales with it). Applied live on toggle/slider via saveInterfaceScale(),
-// re-applied on SettingsPage mount, and on first paint via
-// applyInterfaceScale(loadInterfaceScale()) in main.ts. Stored in
-// localStorage `combox.interface-scale.v1` as { enabled, percent }.
-
-export type InterfaceScale = { enabled: boolean; percent: number }
-
-const SCALE_KEY = 'combox.interface-scale.v1'
-const SCALE_BASE_PX = 16
-
-export function loadInterfaceScale(): InterfaceScale {
-  try {
-    const raw = window.localStorage.getItem(SCALE_KEY)
-    if (!raw) return { enabled: false, percent: 100 }
-    const parsed = JSON.parse(raw) as Partial<InterfaceScale>
-    const percent = Math.max(80, Math.min(150, Math.round(Number(parsed.percent) || 100)))
-    return { enabled: Boolean(parsed.enabled), percent }
-  } catch {
-    return { enabled: false, percent: 100 }
-  }
-}
-
-export function applyInterfaceScale(scale: InterfaceScale): void {
-  try {
-    const root = document.documentElement
-    if (scale.enabled && scale.percent !== 100) {
-      root.style.fontSize = `${((SCALE_BASE_PX * scale.percent) / 100).toFixed(2)}px`
-    } else {
-      root.style.fontSize = ''
-    }
-  } catch {
-    // DOM may be unavailable in tests.
-  }
-}
-
-export function saveInterfaceScale(scale: InterfaceScale): void {
-  try {
-    window.localStorage.setItem(SCALE_KEY, JSON.stringify(scale))
-  } catch {
-    // Ignore storage failures (private mode, quota, etc).
-  }
-  applyInterfaceScale(scale)
-}
-
 // ---- power saving ---------------------------------------------------------------
 // Disables animations for real via a <style> injected on <html>: the master
 // kills every CSS animation/transition app-wide; the scoped toggles only
 // touch media elements (stickers/emoji/GIFs) and overlay UI. GIF frame
 // animation itself cannot be frozen from CSS — the rule pauses CSS-driven
-// motion, which is what the messenger renders. Same startup note as scale:
-// call applyPowerSaving(loadPowerSaving()) from main.ts once allowed.
+// motion, which is what the messenger renders. Applied on first paint via
+// applyPowerSaving(loadPowerSaving()) in main.ts.
 
 export type PowerSaving = { all: boolean; media: boolean; ui: boolean }
 

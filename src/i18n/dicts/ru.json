@@ -1243,5 +1243,7 @@
   "settings.folder_add_chats": "Добавить чаты",
   "settings.folder_chat_types": "Типы чатов",
   "settings.folder_choose_icon": "Выберите иконку",
-  "settings.folder_include_chats_title": "Добавить чаты {selected}/{max}"
+  "settings.folder_include_chats_title": "Добавить чаты {selected}/{max}",
+  "chat.saved_messages": "Избранное",
+  "chat.kind_saved": "Избранное"
 }

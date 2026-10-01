@@ -83,6 +83,33 @@ export class MediaLazyQueue {
 
     this.io.observe(task.target)
 
+    // Safety net for re-renders where IntersectionObserver never fires for an
+    // already-visible target (content-visibility skips, recycled .messageItem
+    // nodes, root/viewport mismatch after a feed rebuild). Without this, a
+    // photo mounted in the viewport after a reaction reload keeps
+    // isNearViewport=false (skeleton) forever — the shape the MessageMedia
+    // observer fix alone could not cure.
+    window.setTimeout(() => {
+      const current = this.tasks.get(task.target)
+      if (!current || current.visible || current.wasSeen) return
+      if (!current.target.isConnected) return
+      try {
+        const rect = current.target.getBoundingClientRect()
+        // Mirror the observer's rootMargin (600px vertical): anything near the
+        // viewport must load even if the IO callback was lost.
+        const nearViewport =
+          rect.bottom >= -600 && rect.top <= (window.innerHeight || 0) + 600 && rect.right >= 0 && rect.left <= (window.innerWidth || 0)
+        if (!nearViewport) return
+        current.visible = true
+        current.wasSeen = true
+        if (!this.queue.includes(current)) this.queue.push(current)
+        this.scheduleProcess()
+        this.fireCallbacks(task.target, true, { target: task.target, isIntersecting: true } as unknown as IntersectionObserverEntry)
+      } catch {
+        // ignore measurement failures; the IO callback remains authoritative
+      }
+    }, 100)
+
     return () => {
       this.unobserve(task.target, onVisibilityChange)
     }
