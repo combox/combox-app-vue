@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout app
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: combox-app-vue
 
